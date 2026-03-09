@@ -19,7 +19,7 @@ if [ -z "$STAGED" ]; then
     exit 0
 fi
 
-if ! black --check --quiet $STAGED; then
+if ! .venv/bin/black --check --quiet $STAGED; then
     echo "ERROR: Files not formatted with black. Run 'black .' and re-stage."
     exit 1
 fi

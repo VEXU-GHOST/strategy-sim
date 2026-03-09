@@ -59,9 +59,7 @@ def is_cell_blocked(
     return (gx, gy) in blocked_cells
 
 
-def _robots_overlap(
-    a: Pose, b: Pose, robot_radius_cells: int
-) -> bool:
+def _robots_overlap(a: Pose, b: Pose, robot_radius_cells: int) -> bool:
     """True if two robots' circular footprints overlap on the grid."""
     dx = a.x - b.x
     dy = a.y - b.y

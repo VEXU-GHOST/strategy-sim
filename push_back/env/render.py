@@ -35,9 +35,9 @@ BALL_COLORS: dict[int, tuple[int, int, int]] = {
     BallColor.BLUE: (40, 80, 220),
 }
 AGENT_COLORS: list[tuple[int, int, int]] = [
-    (220, 50, 50),   # red 0
+    (220, 50, 50),  # red 0
     (255, 120, 120),  # red 1
-    (50, 80, 220),   # blue 0
+    (50, 80, 220),  # blue 0
     (120, 150, 255),  # blue 1
 ]
 AGENT_RADIUS = ROBOT_RADIUS * CELL_SIZE * PPI  # robot radius in pixels
@@ -142,8 +142,12 @@ def render_state(
     # field border
     bdr = 2 * ppi
     draw.rectangle(
-        [IMG_MARGIN + bdr, IMG_MARGIN + bdr,
-         IMG_MARGIN + field_size - bdr, IMG_MARGIN + field_size - bdr],
+        [
+            IMG_MARGIN + bdr,
+            IMG_MARGIN + bdr,
+            IMG_MARGIN + field_size - bdr,
+            IMG_MARGIN + field_size - bdr,
+        ],
         outline=BORDER_COLOR,
         width=3,
     )
@@ -155,9 +159,13 @@ def render_state(
     draw.ellipse([ox - 8, oy - 8, ox + 8, oy + 8], fill=LABEL_COLOR)
     draw.text((ox + 8, oy - 8), "(0,0)", fill=LABEL_COLOR, font=font)
     # +x axis labels at far end (144" + 1 grid step)
-    draw.text(_to_px(FIELD_INCHES // CELL_SIZE, 0), "+x 180°", fill=LABEL_COLOR, font=font)
+    draw.text(
+        _to_px(FIELD_INCHES // CELL_SIZE, 0), "+x 180°", fill=LABEL_COLOR, font=font
+    )
     # +y axis labels at far end (144" + 1 grid step)
-    draw.text(_to_px(0, FIELD_INCHES // CELL_SIZE + 1), "+y 90°", fill=LABEL_COLOR, font=font)
+    draw.text(
+        _to_px(0, FIELD_INCHES // CELL_SIZE + 1), "+y 90°", fill=LABEL_COLOR, font=font
+    )
 
     # blocked cells
     half = CELL_SIZE * ppi // 2

@@ -22,9 +22,9 @@ class BaseObservation:
     Subclasses may add fields; the base holds the common full-field view.
     """
 
-    balls: np.ndarray    # (N, 3) int32 grid positions + color
-    agents: np.ndarray   # (4, 3) int32 [x, y, heading]
-    score: np.ndarray    # (2,) int32
+    balls: np.ndarray  # (N, 3) int32 grid positions + color
+    agents: np.ndarray  # (4, 3) int32 [x, y, heading]
+    score: np.ndarray  # (2,) int32
 
 
 @dataclass(frozen=True)

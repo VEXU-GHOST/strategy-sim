@@ -24,7 +24,7 @@ class Action(IntEnum):
 
     STAY = 0
     FORWARD = 1
-    TURN_LEFT = 2   # counterclockwise (+1 heading index)
+    TURN_LEFT = 2  # counterclockwise (+1 heading index)
     TURN_RIGHT = 3  # clockwise (-1 heading index)
 
 
@@ -33,14 +33,14 @@ class Action(IntEnum):
 # because the real drivetrain is much faster than the speed we simulate — the
 # geometric error is well within our approximation budget.
 HEADING_DELTAS: tuple[tuple[int, int], ...] = (
-    (1, 0),    # E
-    (1, 1),    # NE
-    (0, 1),    # N
-    (-1, 1),   # NW
-    (-1, 0),   # W
+    (1, 0),  # E
+    (1, 1),  # NE
+    (0, 1),  # N
+    (-1, 1),  # NW
+    (-1, 0),  # W
     (-1, -1),  # SW
-    (0, -1),   # S
-    (1, -1),   # SE
+    (0, -1),  # S
+    (1, -1),  # SE
 )
 
 
