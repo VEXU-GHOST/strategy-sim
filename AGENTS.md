@@ -10,6 +10,8 @@ For cleanliness of API, unless further clarified, aim to rewrite code for simpli
 
 Do NOT allow files over 400 lines unless there's a comment at their end explicitly allows it. you must not add such a comment using agent mode, the user must do it. If a file keeps growing, it's a far better option to refactor into smaller, reusable, understandable chunks.
 
+You need to use the venv at .venv when running tests or formatting.
+
 Always format Python code with `black` before committing. The pre-commit hook installed by `scripts/setup.sh` must be present — it blocks commits containing unformatted Python files.
 
 ASK questions, never speculate on unknown information.
