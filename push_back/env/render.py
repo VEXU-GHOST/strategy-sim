@@ -223,6 +223,7 @@ def _render_background(
 # Per-phase timing accumulators (seconds).
 _timings: dict[str, float] = {
     "bg_hash": 0.0,
+    "bg_render": 0.0,
     "bg_copy": 0.0,
     "balls": 0.0,
     "agents": 0.0,
@@ -271,6 +272,9 @@ def render_state(
 
     t = time.perf_counter()
     bg = _render_background(blocked, segments, goals, ppi, draw_grid=draw_grid)
+    _timings["bg_render"] += time.perf_counter() - t
+
+    t = time.perf_counter()
     img = bg.copy()
     draw = ImageDraw.Draw(img)
     _timings["bg_copy"] += time.perf_counter() - t

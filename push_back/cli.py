@@ -102,29 +102,34 @@ def run(
     drain_dt = time.perf_counter() - t_enc
     encode_dt += drain_dt
     total_dt = time.perf_counter() - t0
+    main_per_frame = (sim_dt + render_dt + encode_dt) / frame_count * 1000
     typer.echo(
         f"sim: {sim_dt:.2f}s ({sim_dt / steps * 1000:.2f} ms/step) | "
         f"render: {render_dt:.2f}s ({render_dt / steps * 1000:.2f} ms/frame) | "
         f"encode: {encode_dt:.2f}s ({encode_dt / frame_count * 1000:.2f} ms/frame) | "
         f"drain: {drain_dt:.2f}s | "
-        f"total: {total_dt:.2f}s"
+        f"total: {total_dt:.2f}s ({main_per_frame:.2f} ms/frame)"
     )
     rt = get_render_timings()
     n = rt["frames"] or 1
     typer.echo(
         f"  render breakdown (ms/frame): "
-        f"bg_hash={rt['bg_hash']/n*1000:.1f} "
-        f"bg_copy={rt['bg_copy']/n*1000:.1f} "
-        f"balls={rt['balls']/n*1000:.1f} "
-        f"agents={rt['agents']/n*1000:.1f} "
-        f"hud_step_r={rt['hud_step_render']/n*1000:.1f} "
-        f"hud_step_p={rt['hud_step_paste']/n*1000:.1f} "
-        f"hud_robot_r={rt['hud_robot_render']/n*1000:.1f} "
-        f"hud_robot_p={rt['hud_robot_paste']/n*1000:.1f} "
-        f"hud_ball_r={rt['hud_ball_render']/n*1000:.1f} "
-        f"hud_ball_p={rt['hud_ball_paste']/n*1000:.1f} "
-        f"tobytes={rt['tobytes']/n*1000:.1f} "
-        f"qput={rt.get('qput',0.0)/n*1000:.1f}"
+        f"bg_hash={rt['bg_hash']/n*1000:.2f} "
+        f"bg_render={rt['bg_render']/n*1000:.2f} "
+        f"bg_copy={rt['bg_copy']/n*1000:.2f} "
+        f"balls={rt['balls']/n*1000:.2f} "
+        f"agents={rt['agents']/n*1000:.2f} "
+        f"hud_step_r={rt['hud_step_render']/n*1000:.2f} "
+        f"hud_step_p={rt['hud_step_paste']/n*1000:.2f} "
+        f"hud_robot_r={rt['hud_robot_render']/n*1000:.2f} "
+        f"hud_robot_p={rt['hud_robot_paste']/n*1000:.2f} "
+        f"hud_ball_r={rt['hud_ball_render']/n*1000:.2f} "
+        f"hud_ball_p={rt['hud_ball_paste']/n*1000:.2f}"
+    )
+    typer.echo(
+        f"  feed breakdown (ms/frame): "
+        f"tobytes={rt['tobytes']/n*1000:.2f} "
+        f"qput={rt.get('qput',0.0)/n*1000:.2f}"
     )
     typer.echo(f"saved {frame_count} frames → {out}")
 
@@ -230,6 +235,17 @@ class _Encoder:
         n = et["frames"] or 1
         import typer
 
+        per_frame = (
+            (
+                et["qget_wait"]
+                + et["asarray"]
+                + et["from_buf"]
+                + et["encode"]
+                + et["mux"]
+            )
+            / n
+            * 1000
+        )
         typer.echo(
             f"  encoder thread (ms/frame): "
             f"qget={et['qget_wait']/n*1000:.2f} "
@@ -237,6 +253,7 @@ class _Encoder:
             f"from_buf={et['from_buf']/n*1000:.3f} "
             f"encode={et['encode']/n*1000:.2f} "
             f"mux={et['mux']/n*1000:.3f} "
+            f"| total={per_frame:.2f} "
             f"flush={et['flush']*1000:.1f}ms(total)"
         )
 
