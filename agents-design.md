@@ -252,3 +252,52 @@ BaseRobot (ABC)
 - `render.py`: Draws collision segments from `state.collision_segments`; `AGENT_RADIUS` derived from `ROBOT_RADIUS`.
 - `random_robot.py`: `valid_actions()` masks FORWARD when destination is blocked; `tick()` samples from valid actions only. Old bounds check removed (env handles centrally).
 - `base.py`: Added `set_blocked_cells()` for action masking support.
+
+## 2026-03-08: Ball Ingestion & Spit Mechanic (Copilot)
+
+**Agent**: GitHub Copilot (Claude Opus 4.6)
+
+**Changes**:
+- `state.py`: Added `HEADING_DELTAS` (canonical location), `agent_color()` helper, `robot_held_balls: list[list[BallColor]]` to `WorldState`.
+- `push_back.py`: After `resolve_moves()`, checks each robot's front cell (ROBOT_RADIUS cells ahead in heading direction) for balls. Ingested balls go through `robot.filter_balls()` — kept balls stored in `robot_held_balls`, spat balls placed at back cell (ROBOT_RADIUS cells behind).
+- `base.py`: Added `filter_balls(balls, own_color) -> (keep, spit)` — default keeps all.
+- `random_robot.py`: Overrides `filter_balls()` to keep own-color, spit opponent-color. Imports `HEADING_DELTAS` from `state.py` instead of local duplicate.
+- `render.py`: Balls aggregated by cell — single ball = circle, multiple same-color = circle + count, mixed red/blue = pie-split with counts. Robots display held ball counts (red left, blue right) inside circle.
+
+## 2026-03-08: SweeperRobot (Copilot)
+
+**Agent**: GitHub Copilot (Claude Opus 4.6)
+
+**Changes**:
+- `robots/sweeper.py` (new): Boustrophedon (lawn-mower) sweep across the field. Generates row endpoints as waypoints (alternating E/W), navigates with cardinal turns. Stuck detection: skips waypoint after 4 ticks of FORWARD-but-didn't-move (handles robot-robot collision rejection by `resolve_moves`). Inherits kinematics + `filter_balls` from `RandomRobot`.
+- `robots/__init__.py`: Registered `SweeperRobot`.
+- `cli.py`: blue_0 now uses `SweeperRobot` (was `RandomRobot`).
+
+## 2026-03-08: Replace CLI with run scripts (Copilot)
+
+**Agent**: GitHub Copilot (Claude Opus 4.6)
+
+**Changes**:
+- `push_back/runner.py` (new): Shared `run_sim()` and `save_frames()` utilities.
+- `runs/default.py` (new): Self-contained run script replacing the typer CLI. Configure robots, balls, steps, etc. as plain Python.
+- `pyproject.toml`: Removed `[project.scripts]` entry and `typer` dependency.
+- `cli.py`: Kept for reference but no longer the entry point.
+
+## 2026-03-15: CLI Enhancements & Ball Override (Copilot)
+
+**Agent**: GitHub Copilot (Claude Opus 4.6)
+
+**Changes**:
+- `cli.py`: Added `--balls` flag to pass ball positions as `"x,y,color;..."`. Dual output mode: `.gif` → GIF only, `.png` → numbered PNGs only, no extension → both. Added `tqdm` progress bars for simulation and rendering. Robot lineup changed to StandStill (red) + SweeperRobot (blue_0).
+- `push_back.py`: `reset()` accepts `options={"balls": np.ndarray}` to override random ball placement. Prints ball IDs (index, position, color) at start.
+- `render.py`: Fixed heading line direction (pixel axes swapped vs grid axes). Larger label font (`size=20` with fallback). Axis labels drawn last so they render on top.
+
+## 2026-03-15: Project Config & Docs (Copilot)
+
+**Agent**: GitHub Copilot (Claude Opus 4.6)
+
+**Changes**:
+- `pyproject.toml`: Renamed project to `ghost-strategy`, entry point → `ghost-strategy`. Removed `pettingzoo`/`gymnasium` from core deps, added `tqdm`. Optional `[zoo]` extra for `pettingzoo`.
+- `.gitignore`: Added `outputs` directory.
+- `README.md`: Updated CLI usage examples for new dual-output format.
+- `AGENTS.md`: Added minimal quick-start documentation convention.

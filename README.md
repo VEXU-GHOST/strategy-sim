@@ -16,9 +16,9 @@ source .venv/bin/activate
 pip install -e .
 bash scripts/setup.sh
 
-# run the CLI (writes output.gif by default)
+# run the CLI (outputs both GIF + PNGs by default)
 push-back
-push-back --steps 120 --out demo.gif --seed 0 --fps 15
+push-back --steps 120 --out outputs/demo --fps 15
 ```
 
 ## Project Structure

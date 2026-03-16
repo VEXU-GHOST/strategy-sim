@@ -9,6 +9,7 @@ Draws a top-down view of the 144×144" VEX field:
 from __future__ import annotations
 
 import math
+from collections import defaultdict
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -18,6 +19,7 @@ from push_back.env.state import (
     CELL_SIZE,
     FIELD_INCHES,
     GRID_SIZE,
+    HEADING_DELTAS,
     ROBOT_RADIUS,
     Goal,
     WorldState,
@@ -102,17 +104,39 @@ def _draw_agent(
     gy: int,
     heading: int,
     color: tuple[int, int, int],
+    held_balls: list[int],
 ) -> None:
-    """Draw a robot as a filled circle with a heading line."""
+    """Draw a robot as a filled circle with heading line and held-ball counts."""
     cx, cy = _to_px(gx, gy)
     r = AGENT_RADIUS
     draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=color, outline="white", width=2)
 
-    # convert discrete heading (0-7, 45° steps) to radians
-    heading_rad = heading * (math.pi / 4)
-    lx = cx + int(r * math.cos(-heading_rad))  # negate because pixel y is flipped
-    ly = cy + int(r * math.sin(-heading_rad))
+    # heading line — pixel axes are swapped & flipped vs grid axes:
+    #   pixel_x ← -(grid_y),  pixel_y ← -(grid_x)
+    dx, dy = HEADING_DELTAS[heading]
+    length = math.hypot(dx, dy) or 1.0
+    lx = cx + int(r * (-dy) / length)
+    ly = cy + int(r * (-dx) / length)
     draw.line([(cx, cy), (lx, ly)], fill="white", width=3)
+
+    # held ball counts
+    red_n = sum(1 for b in held_balls if b == BallColor.RED)
+    blue_n = sum(1 for b in held_balls if b == BallColor.BLUE)
+    font = ImageFont.load_default()
+    if red_n > 0:
+        draw.text(
+            (cx - r + 2, cy + int(r * 0.3)),
+            str(red_n),
+            fill=BALL_COLORS[BallColor.RED],
+            font=font,
+        )
+    if blue_n > 0:
+        draw.text(
+            (cx + int(r * 0.3), cy + int(r * 0.3)),
+            str(blue_n),
+            fill=BALL_COLORS[BallColor.BLUE],
+            font=font,
+        )
 
 
 def render_state(
@@ -155,17 +179,10 @@ def render_state(
     # origin marker and axes
     ox, oy = _to_px(0, 0)  # pixel position of grid (0,0)
     font = ImageFont.load_default()
-    # origin dot + label
-    draw.ellipse([ox - 8, oy - 8, ox + 8, oy + 8], fill=LABEL_COLOR)
-    draw.text((ox + 8, oy - 8), "(0,0)", fill=LABEL_COLOR, font=font)
-    # +x axis labels at far end (144" + 1 grid step)
-    draw.text(
-        _to_px(FIELD_INCHES // CELL_SIZE, 0), "+x 180°", fill=LABEL_COLOR, font=font
-    )
-    # +y axis labels at far end (144" + 1 grid step)
-    draw.text(
-        _to_px(0, FIELD_INCHES // CELL_SIZE + 1), "+y 90°", fill=LABEL_COLOR, font=font
-    )
+    try:
+        label_font = ImageFont.load_default(size=20)
+    except TypeError:
+        label_font = font
 
     # blocked cells
     half = CELL_SIZE * ppi // 2
@@ -186,20 +203,66 @@ def render_state(
     for goal in state.goals:
         _draw_goal(draw, goal, ppi)
 
-    # balls
+    # balls — aggregate by cell
     ball_r = int(BALL_DIA / 2 * ppi)
+    cell_balls: dict[tuple[int, int], dict[int, int]] = defaultdict(
+        lambda: defaultdict(int)
+    )
     for row in state.balls_on_field:
         bx, by, color = int(row[0]), int(row[1]), int(row[2])
+        cell_balls[(bx, by)][color] += 1
+
+    font = ImageFont.load_default()
+    for (bx, by), colors in cell_balls.items():
         px, py = _to_px(bx, by)
-        fill = BALL_COLORS.get(color, (0, 200, 50))
-        draw.ellipse(
-            [px - ball_r, py - ball_r, px + ball_r, py + ball_r],
-            fill=fill,
-        )
+        red_n = colors.get(int(BallColor.RED), 0)
+        blue_n = colors.get(int(BallColor.BLUE), 0)
+        total = red_n + blue_n
+        if total == 1:
+            c = BallColor.RED if red_n else BallColor.BLUE
+            draw.ellipse(
+                [px - ball_r, py - ball_r, px + ball_r, py + ball_r],
+                fill=BALL_COLORS[c],
+            )
+        elif red_n > 0 and blue_n > 0:
+            # Mixed — left half red, right half blue
+            draw.pieslice(
+                [px - ball_r, py - ball_r, px + ball_r, py + ball_r],
+                90,
+                270,
+                fill=BALL_COLORS[BallColor.RED],
+            )
+            draw.pieslice(
+                [px - ball_r, py - ball_r, px + ball_r, py + ball_r],
+                270,
+                90,
+                fill=BALL_COLORS[BallColor.BLUE],
+            )
+            draw.text((px - ball_r, py - 5), str(red_n), fill="white", font=font)
+            draw.text((px + 2, py - 5), str(blue_n), fill="white", font=font)
+        else:
+            # Single color, multiple balls
+            c = BallColor.RED if red_n else BallColor.BLUE
+            draw.ellipse(
+                [px - ball_r, py - ball_r, px + ball_r, py + ball_r],
+                fill=BALL_COLORS[c],
+            )
+            draw.text((px - 4, py - 5), str(total), fill="white", font=font)
 
     # agents
     for i, pose in enumerate(state.agents):
         color = AGENT_COLORS[i] if i < len(AGENT_COLORS) else (200, 200, 200)
-        _draw_agent(draw, pose.x, pose.y, pose.heading, color)
+        held = [int(b) for b in state.robot_held_balls[i]]
+        _draw_agent(draw, pose.x, pose.y, pose.heading, color, held)
+
+    # origin dot + label (drawn last so they're on top)
+    draw.ellipse([ox - 8, oy - 8, ox + 8, oy + 8], fill=LABEL_COLOR)
+    draw.text((ox + 8, oy - 8), "(0,0)", fill=LABEL_COLOR, font=label_font)
+    # +x axis label at far end
+    ex, ey = _to_px(FIELD_INCHES // CELL_SIZE, 0)
+    draw.text((ex, ey - 25), "+x 180°", fill=LABEL_COLOR, font=label_font)
+    # +y axis label at far end
+    yx, yy = _to_px(0, FIELD_INCHES // CELL_SIZE + 1)
+    draw.text((yx, yy - 25), "+y 90°", fill=LABEL_COLOR, font=label_font)
 
     return img

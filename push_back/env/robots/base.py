@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import gymnasium
 import numpy as np
 
-from push_back.env.state import WorldState, Pose
+from push_back.env.state import BallColor, WorldState, Pose
 
 
 @dataclass(frozen=True)
@@ -76,6 +76,15 @@ class BaseRobot(ABC):
     def set_blocked_cells(self, blocked: set[tuple[int, int]]) -> None:
         """Store blocked cells for action masking. Called by env after reset."""
         self._blocked_cells: set[tuple[int, int]] = blocked
+
+    def filter_balls(
+        self, balls: list[BallColor], own_color: BallColor
+    ) -> tuple[list[BallColor], list[BallColor]]:
+        """Decide which ingested balls to keep vs spit.
+
+        Returns ``(keep, spit)``.  Default keeps all balls.
+        """
+        return list(balls), []
 
     def busy(self) -> bool:
         """True if the robot is mid-macro-action. Override for macro robots."""

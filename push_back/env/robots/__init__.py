@@ -4,6 +4,7 @@ from push_back.env.robots.base import BaseAction, BaseObservation, BaseRobot
 from push_back.env.robots.high_level import GoToRobot
 from push_back.env.robots.random_robot import Action, RandomRobot
 from push_back.env.robots.stand_still import StandStill
+from push_back.env.robots.sweeper import SweeperRobot
 
 __all__ = [
     "Action",
@@ -13,4 +14,5 @@ __all__ = [
     "GoToRobot",
     "RandomRobot",
     "StandStill",
+    "SweeperRobot",
 ]

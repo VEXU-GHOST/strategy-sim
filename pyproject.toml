@@ -1,21 +1,20 @@
 [project]
-name = "push-back"
+name = "ghost-strategy"
 version = "0.1.0"
 description = "VEX field strategy simulator with pluggable agents"
 requires-python = ">=3.10"
 dependencies = [
     "numpy",
     "pillow",
-    "pettingzoo",
-    "gymnasium",
+    "tqdm",
     "typer",
 ]
 
 [project.optional-dependencies]
-dev = ["black", "pytest"]
+zoo = ["pettingzoo"]
 
 [project.scripts]
-push-back = "push_back.cli:app"
+ghost-strategy = "ghost_strategy.cli:app"
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -23,6 +22,3 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["push_back*"]
-
-[tool.black]
-target-version = ["py310"]

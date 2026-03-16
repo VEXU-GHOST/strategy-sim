@@ -13,3 +13,6 @@ Do NOT allow files over 400 lines unless there's a comment at their end explicit
 Always format Python code with `black` before committing. The pre-commit hook installed by `scripts/setup.sh` must be present — it blocks commits containing unformatted Python files.
 
 ASK questions, never speculate on unknown information.
+
+
+Whenever documenting a "minimal" quick start/guide, document a minmial command that shows how few arguments you can provide, and a medium features command with the common features. Ask if you are unusure which features those might be.

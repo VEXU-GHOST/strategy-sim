@@ -13,7 +13,7 @@ import numpy as np
 
 from push_back.env.robots.base import BaseObservation
 from push_back.env.robots.stand_still import StandStill
-from push_back.env.state import GRID_SIZE, Pose
+from push_back.env.state import BallColor, GRID_SIZE, HEADING_DELTAS, Pose
 from push_back.env.collision import is_cell_blocked
 
 DEFAULT_TURN_TICKS: int = 3
@@ -28,20 +28,7 @@ class Action(IntEnum):
     TURN_RIGHT = 3  # clockwise (-1 heading index)
 
 
-# Grid-cell deltas (dx, dy) for each heading.
-# NOTE: diagonal moves cover 4*sqrt(2) ~ 5.66" instead of 4".  We accept this
-# because the real drivetrain is much faster than the speed we simulate — the
-# geometric error is well within our approximation budget.
-HEADING_DELTAS: tuple[tuple[int, int], ...] = (
-    (1, 0),  # E
-    (1, 1),  # NE
-    (0, 1),  # N
-    (-1, 1),  # NW
-    (-1, 0),  # W
-    (-1, -1),  # SW
-    (0, -1),  # S
-    (1, -1),  # SE
-)
+# HEADING_DELTAS imported from state.py
 
 
 class RandomRobot(StandStill):
@@ -111,6 +98,14 @@ class RandomRobot(StandStill):
         self._turn_progress = 0
         self._turn_direction = 0
         return new
+
+    def filter_balls(
+        self, balls: list[BallColor], own_color: BallColor
+    ) -> tuple[list[BallColor], list[BallColor]]:
+        """Keep own-color balls, spit out opponent balls."""
+        keep = [b for b in balls if b == own_color]
+        spit = [b for b in balls if b != own_color]
+        return keep, spit
 
     def reset(self) -> None:
         self._turn_progress = 0

@@ -136,6 +136,24 @@ def compute_score(goals: list[Goal]) -> tuple[int, int]:
     return (red, blue)
 
 
+# Grid-cell deltas (dx, dy) for each heading (E, NE, N, NW, W, SW, S, SE).
+HEADING_DELTAS: tuple[tuple[int, int], ...] = (
+    (1, 0),  # E
+    (1, 1),  # NE
+    (0, 1),  # N
+    (-1, 1),  # NW
+    (-1, 0),  # W
+    (-1, -1),  # SW
+    (0, -1),  # S
+    (1, -1),  # SE
+)
+
+
+def agent_color(agent_index: int) -> BallColor:
+    """Return the alliance color for the given agent index (0-3)."""
+    return BallColor.RED if agent_index < 2 else BallColor.BLUE
+
+
 @dataclass
 class WorldState:
     """Complete snapshot of the field at one timestep.
@@ -147,6 +165,7 @@ class WorldState:
         goals: list of Goal objects on the field.
         collision_segments: line segments (in inches) for walls + goal rects.
         blocked_cells: grid cells a robot center cannot occupy.
+        robot_held_balls: per-robot list of held BallColor values.
         score: (red, blue) cumulative scores.
         timestep: current simulation tick (0.1 s each).
     """
@@ -158,5 +177,8 @@ class WorldState:
     goals: list[Goal] = field(default_factory=list)
     collision_segments: list = field(default_factory=list)
     blocked_cells: set = field(default_factory=set)
+    robot_held_balls: list[list[BallColor]] = field(
+        default_factory=lambda: [[] for _ in range(4)]
+    )
     score: tuple[int, int] = (0, 0)
     timestep: int = 0

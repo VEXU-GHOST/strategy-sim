@@ -21,10 +21,12 @@ from push_back.env.collision import compute_blocked_cells, resolve_moves
 from push_back.env.state import (
     BallColor,
     GRID_SIZE,
+    HEADING_DELTAS,
     ROBOT_RADIUS,
     WorldState,
     Heading,
     Pose,
+    agent_color,
 )
 
 DT: float = 0.1  # seconds per tick
@@ -81,13 +83,25 @@ class PushBackEnv(ParallelEnv):
     def reset(
         self, seed: int | None = None, options: dict | None = None
     ) -> tuple[dict[str, dict], dict[str, dict]]:
-        """Randomize ball positions and place agents in starting corners."""
+        """Randomize ball positions and place agents in starting corners.
+
+        Pass ``options={"balls": np.ndarray}`` with shape *(N, 3)* to
+        override random ball placement.  Columns are ``(x, y, color)``.
+        """
         self.agents = list(self.possible_agents)
         self.rng = np.random.default_rng(seed)
 
-        positions = self.rng.integers(2, GRID_SIZE - 2, size=(self.n_balls, 2))
-        colors = self.rng.choice([BallColor.RED, BallColor.BLUE], size=self.n_balls)
-        balls_on_field = np.column_stack([positions, colors]).astype(np.int32)
+        override_balls = (options or {}).get("balls")
+        if override_balls is not None:
+            balls_on_field = np.asarray(override_balls, dtype=np.int32)
+        else:
+            positions = self.rng.integers(2, GRID_SIZE - 2, size=(self.n_balls, 2))
+            colors = self.rng.choice([BallColor.RED, BallColor.BLUE], size=self.n_balls)
+            balls_on_field = np.column_stack([positions, colors]).astype(np.int32)
+
+        for i, (x, y, c) in enumerate(balls_on_field):
+            color_name = "RED" if c == BallColor.RED else "BLUE"
+            print(f"  ball {i}: ({x}, {y}) {color_name}")
 
         goals = make_default_goals()
         segments = make_collision_segments(goals)
@@ -145,6 +159,32 @@ class PushBackEnv(ParallelEnv):
             self.state.blocked_cells,
             ROBOT_RADIUS,
         )
+
+        # Ball ingestion: front cell = ROBOT_RADIUS cells in heading dir
+        for i, pose in enumerate(self.state.agents):
+            dx, dy = HEADING_DELTAS[pose.heading]
+            front_x = pose.x + ROBOT_RADIUS * dx
+            front_y = pose.y + ROBOT_RADIUS * dy
+            if len(self.state.balls_on_field) == 0:
+                continue
+            mask = (self.state.balls_on_field[:, 0] == front_x) & (
+                self.state.balls_on_field[:, 1] == front_y
+            )
+            if not mask.any():
+                continue
+            ingested = [BallColor(c) for c in self.state.balls_on_field[mask, 2]]
+            self.state.balls_on_field = self.state.balls_on_field[~mask]
+            robot = self._robots[self.possible_agents[i]]
+            keep, spit = robot.filter_balls(ingested, agent_color(i))
+            self.state.robot_held_balls[i].extend(keep)
+            if spit:
+                back_x = pose.x - ROBOT_RADIUS * dx
+                back_y = pose.y - ROBOT_RADIUS * dy
+                for ball_c in spit:
+                    new_row = np.array([[back_x, back_y, int(ball_c)]], dtype=np.int32)
+                    self.state.balls_on_field = np.concatenate(
+                        [self.state.balls_on_field, new_row]
+                    )
 
         self.state.timestep += 1
         truncated = self.state.timestep >= self.max_steps
