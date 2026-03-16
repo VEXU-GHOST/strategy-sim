@@ -427,3 +427,39 @@ Added per-phase timing accumulators in `render.py` (`_timings` dict) with `get_r
 - `render_hud.py`: Removed `_DIGIT_GLYPHS`, `_DIGIT_H`, `_PREFIX_IMG`, `_PREFIX_TEXT` module globals. Added `_render_glyph()`, `_render_text()`. Rewrote `render_step_panel`, `render_robot_panel`, `render_ball_panel` to use the cache pyramid.
 - `cli.py`: Replaced ffmpeg subprocess `_Encoder` with PyAV-based threaded encoder. Removed `fcntl`, `subprocess`, pipe buffer sizing. Added `av` dependency.
 - `pyproject.toml`: Added `av` to dependencies.
+
+---
+
+## 2026-03-16: Zero-copy VideoFrame creation (Copilot)
+
+**Agent**: GitHub Copilot (Claude Opus 4.6)
+
+**Task**: Eliminate GIL-holding `av.VideoFrame.from_image()` (~220µs/frame copying 829KB) by switching to zero-copy `from_numpy_buffer()`.
+
+**Investigation**: Explored all PyAV VideoFrame factory methods:
+- `from_image()`: allocates + copies 829KB twice (tobytes + memcpy). Holds GIL entire time.
+- `from_numpy_buffer()`: sets plane pointers into existing numpy array memory. Zero copy. ~1-2µs GIL.
+- `from_ndarray()`: may copy depending on format/layout — previously tested at 312µs (slower).
+- `from_bytes()`: copies from raw bytes. Not useful here.
+- Multi-threaded encoding (`thread_count=4, thread_type=3`): tested and rejected — encode halves but GIL contention inflates render by same amount. Net wash.
+
+**Change**: In `_Encoder._writer()`:
+```python
+# Before (copies 829KB, holds GIL ~220µs):
+vf = av.VideoFrame.from_image(pil_img)
+
+# After (zero-copy pointer setup, GIL ~1-2µs):
+npy = np.asarray(pil_img)  # view into PIL's existing pixel buffer
+vf = av.VideoFrame.from_numpy_buffer(npy, format="rgb24")
+```
+
+**Why it works**: PIL already stores pixels as a contiguous C array. `np.asarray()` creates a 96-byte header pointing at that buffer (no copy). `from_numpy_buffer()` sets libav plane pointers to the same memory and holds a refcount to keep it alive. Two pointer setups vs two 829KB memcpys.
+
+**Result (1050 steps, 3 runs each)**:
+- Before: 0.91 / 1.06 / 1.17s (median ~1.06s), encode ~0.44s
+- After: **0.88 / 0.91 / 0.94s** (median ~0.91s), encode ~0.38s
+- Encode improvement: ~14% (0.44→0.38s)
+- Best run: **0.88s** (sub-1s target achieved)
+
+### Files changed
+- `cli.py`: `_writer()` now uses `np.asarray()` + `av.VideoFrame.from_numpy_buffer()` instead of `av.VideoFrame.from_image()`.

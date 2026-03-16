@@ -159,6 +159,7 @@ class _Encoder:
     def _writer(self) -> None:
         """Drain queue and encode via PyAV (GIL released during x264 work)."""
         import av
+        import numpy as np
 
         stream = self._stream
         container = self._container
@@ -166,7 +167,8 @@ class _Encoder:
             pil_img = self._q.get()
             if pil_img is None:
                 break
-            vf = av.VideoFrame.from_image(pil_img)
+            npy = np.asarray(pil_img)  # zero-copy view into PIL buffer
+            vf = av.VideoFrame.from_numpy_buffer(npy, format="rgb24")
             for packet in stream.encode(vf):
                 container.mux(packet)
         # Flush encoder
