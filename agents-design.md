@@ -465,3 +465,39 @@ vf = av.VideoFrame.from_numpy_buffer(npy, format="rgb24")
 
 ### Files changed
 - `cli.py`: `_writer()` now uses `np.asarray()` + `av.VideoFrame.from_numpy_buffer()` instead of `av.VideoFrame.from_image()`.
+
+---
+
+## 2026-03-16: Switch to libx264rgb ultrafast (Copilot)
+
+**Agent**: GitHub Copilot (Claude Opus 4.6)
+
+**Task**: Find fastest codec/preset combo for 576×480 RGB frames.
+
+**Investigation**: Benchmarked 15 codec/preset combinations both in isolation (500 frames) and in real pipeline (5×1050 steps each). Also tested Pillow-SIMD (rejected — latest 9.5.0 missing `ImageFont.load_default(size=)` from Pillow 10+, project abandoned since 2023).
+
+**Encoder thread breakdown** (per frame, instrumented):
+- `qget_wait`: 0.01ms (queue never starves)
+- `asarray`: 0.14ms (PIL `__array_interface__` still copies 829KB — not truly zero-copy)
+- `from_buf`: 0.01ms (pointer setup)
+- `encode`: 0.31ms with libx264rgb ultrafast (was 0.69ms with libx264 veryfast)
+- `mux`: 0.01ms
+
+**Real pipeline results (1050 steps, 5 runs each, on AC power)**:
+
+| Config | Median total | Encode thread ms/frame |
+|---|---|---|
+| libx264 veryfast yuv420p (old) | 0.90s | 0.69 |
+| libx264 ultrafast yuv420p | 0.66s | 0.46 |
+| libx264rgb veryfast rgb24 | 0.81s | 0.56 |
+| **libx264rgb ultrafast rgb24** | **0.54s** | **0.31** |
+
+**9000 steps**: 8.99s → **3.87s** (-57%)
+
+**Why libx264rgb ultrafast wins**:
+1. Skips RGB→YUV420p color space conversion (~0.15ms/frame saved)
+2. Ultrafast preset does less compression work (~0.2ms/frame saved)
+3. Encoder thread finishes faster → zero queue backpressure → render thread gets full GIL access → render itself speeds up (0.43→0.37 ms/frame)
+
+### Files changed
+- `cli.py`: Encoder switched from `libx264`/`yuv420p`/`veryfast` to `libx264rgb`/`rgb24`/`ultrafast`.

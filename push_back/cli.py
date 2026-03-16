@@ -98,13 +98,14 @@ def run(
         frame_count += 1
     t_enc = time.perf_counter()
     enc.finish()
+    enc.report()
     drain_dt = time.perf_counter() - t_enc
     encode_dt += drain_dt
     total_dt = time.perf_counter() - t0
     typer.echo(
-        f"sim: {sim_dt:.2f}s ({sim_dt / steps * 1000:.1f} ms/step) | "
-        f"render: {render_dt:.2f}s ({render_dt / steps * 1000:.1f} ms/frame) | "
-        f"encode: {encode_dt:.2f}s ({encode_dt / frame_count * 1000:.1f} ms/frame) | "
+        f"sim: {sim_dt:.2f}s ({sim_dt / steps * 1000:.2f} ms/step) | "
+        f"render: {render_dt:.2f}s ({render_dt / steps * 1000:.2f} ms/frame) | "
+        f"encode: {encode_dt:.2f}s ({encode_dt / frame_count * 1000:.2f} ms/frame) | "
         f"drain: {drain_dt:.2f}s | "
         f"total: {total_dt:.2f}s"
     )
@@ -145,12 +146,12 @@ class _Encoder:
         w, h = size
         self._container: av.container.OutputContainer = av.open(str(out), mode="w")
         self._stream: av.video.stream.VideoStream = self._container.add_stream(
-            "libx264", rate=FPS
+            "libx264rgb", rate=FPS
         )
         self._stream.width = w
         self._stream.height = h
-        self._stream.pix_fmt = "yuv420p"
-        self._stream.options = {"preset": "veryfast"}
+        self._stream.pix_fmt = "rgb24"
+        self._stream.options = {"preset": "ultrafast"}
 
         self._q: queue.Queue[Image.Image | None] = queue.Queue(maxsize=_QUEUE_DEPTH)
         self._thread = threading.Thread(target=self._writer, daemon=True)
@@ -160,20 +161,48 @@ class _Encoder:
         """Drain queue and encode via PyAV (GIL released during x264 work)."""
         import av
         import numpy as np
+        import time
 
         stream = self._stream
         container = self._container
+        # Per-phase accumulators (writer thread only — no lock needed)
+        self._enc_timings: dict[str, float] = {
+            "qget_wait": 0.0,
+            "asarray": 0.0,
+            "from_buf": 0.0,
+            "encode": 0.0,
+            "mux": 0.0,
+            "flush": 0.0,
+            "frames": 0,
+        }
+        et = self._enc_timings
         while True:
+            t0 = time.perf_counter()
             pil_img = self._q.get()
+            t1 = time.perf_counter()
+            et["qget_wait"] += t1 - t0
             if pil_img is None:
                 break
             npy = np.asarray(pil_img)  # zero-copy view into PIL buffer
+            t2 = time.perf_counter()
+            et["asarray"] += t2 - t1
             vf = av.VideoFrame.from_numpy_buffer(npy, format="rgb24")
+            t3 = time.perf_counter()
+            et["from_buf"] += t3 - t2
             for packet in stream.encode(vf):
+                t4 = time.perf_counter()
+                et["encode"] += t4 - t3
                 container.mux(packet)
+                t3 = time.perf_counter()
+                et["mux"] += t3 - t4
+            t4 = time.perf_counter()
+            et["encode"] += t4 - t3  # encode call that yields no packet
+            et["frames"] += 1
         # Flush encoder
+        tf0 = time.perf_counter()
         for packet in stream.encode():
             container.mux(packet)
+        et["flush"] = time.perf_counter() - tf0
 
     def feed(self, frame: Image.Image) -> None:
         """Enqueue PIL frame for encoding (may block if queue full)."""
@@ -194,6 +223,22 @@ class _Encoder:
         self._q.put(None)
         self._thread.join()
         self._container.close()
+
+    def report(self) -> None:
+        """Print encoder thread timing breakdown."""
+        et = self._enc_timings
+        n = et["frames"] or 1
+        import typer
+
+        typer.echo(
+            f"  encoder thread (ms/frame): "
+            f"qget={et['qget_wait']/n*1000:.2f} "
+            f"asarray={et['asarray']/n*1000:.3f} "
+            f"from_buf={et['from_buf']/n*1000:.3f} "
+            f"encode={et['encode']/n*1000:.2f} "
+            f"mux={et['mux']/n*1000:.3f} "
+            f"flush={et['flush']*1000:.1f}ms(total)"
+        )
 
 
 if __name__ == "__main__":
