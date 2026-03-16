@@ -406,5 +406,24 @@ Added per-phase timing accumulators in `render.py` (`_timings` dict) with `get_r
 
 **Tradeoff**: Loses threading overlap between render and encode. At 1050 steps current qput shows 0.0–0.5ms variance (often blocking on pipe), so the threading benefit may be small.
 
+**Result (9000 steps)**: encode_to_file total=12.22s vs baseline 11.95s — **2% slower**. Synchronous encoding kills the threading parallelism. CPU% dropped 295→280%. Reverted.
+
+### PyAV threaded encoder (KEPT)
+
+**Task**: Replace ffmpeg subprocess + pipe with PyAV (libx264 in-process). Since PyAV releases the GIL during `stream.encode()` ([PyAV #303](https://github.com/PyAV-Org/PyAV/issues/303)), x264 work runs in a background thread truly in parallel with Python rendering.
+
+**Architecture**: `render_state()` → `queue.put(pil_img)` → writer thread calls `av.VideoFrame.from_image(pil_img)` + `stream.encode(vf)` (GIL released during x264). No bytes serialization, no pipe, no subprocess.
+
+**Result (9000 steps)**:
+- Total: 11.95s → **9.72s** (-18.7%)
+- Encode: 7.27s → 4.64s (-36%)
+- tobytes: 0.2ms → 0.0ms (eliminated)
+- CPU%: 295% → 356% (more parallelism)
+- maxresident: 126MB → 143MB (+13%)
+
+**At 1050 steps**: warm runs 1.05–1.15s (variance), vs baseline ~1.17s.
+
 ### Files changed
 - `render_hud.py`: Removed `_DIGIT_GLYPHS`, `_DIGIT_H`, `_PREFIX_IMG`, `_PREFIX_TEXT` module globals. Added `_render_glyph()`, `_render_text()`. Rewrote `render_step_panel`, `render_robot_panel`, `render_ball_panel` to use the cache pyramid.
+- `cli.py`: Replaced ffmpeg subprocess `_Encoder` with PyAV-based threaded encoder. Removed `fcntl`, `subprocess`, pipe buffer sizing. Added `av` dependency.
+- `pyproject.toml`: Added `av` to dependencies.

@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "VEX field strategy simulator with pluggable agents"
 requires-python = ">=3.10"
 dependencies = [
+    "av",
     "numpy",
     "pillow",
     "tqdm",

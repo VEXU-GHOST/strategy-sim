@@ -130,89 +130,68 @@ def run(
 
 FPS = 10
 _QUEUE_DEPTH = 30  # buffer up to N frames before blocking the main thread
-# consumes that many frames of memory
 
 
 class _Encoder:
-    """Threaded ffmpeg encoder — writes happen on a background thread."""
+    """Threaded PyAV encoder — x264 runs in background thread, GIL released."""
 
     def __init__(self, size: tuple[int, int], out: Path) -> None:
-        import fcntl
-        import subprocess
-
-        out.parent.mkdir(parents=True, exist_ok=True)
-        w, h = size
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-loglevel",
-            "warning",
-            "-f",
-            "rawvideo",
-            "-pix_fmt",
-            "rgb24",
-            "-s",
-            f"{w}x{h}",
-            "-r",
-            str(FPS),
-            "-i",
-            "pipe:",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-pix_fmt",
-            "yuv420p",
-            str(out),
-        ]
-        self._proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
-        F_SETPIPE_SZ = 1031
-        try:
-            fcntl.fcntl(self._proc.stdin.fileno(), F_SETPIPE_SZ, 1024 * 1024)  # type: ignore[union-attr]
-        except OSError:
-            pass
-
         import queue
         import threading
 
-        self._q: queue.Queue[bytes | None] = queue.Queue(maxsize=_QUEUE_DEPTH)
+        import av
+
+        out.parent.mkdir(parents=True, exist_ok=True)
+        w, h = size
+        self._container: av.container.OutputContainer = av.open(str(out), mode="w")
+        self._stream: av.video.stream.VideoStream = self._container.add_stream(
+            "libx264", rate=FPS
+        )
+        self._stream.width = w
+        self._stream.height = h
+        self._stream.pix_fmt = "yuv420p"
+        self._stream.options = {"preset": "veryfast"}
+
+        self._q: queue.Queue[Image.Image | None] = queue.Queue(maxsize=_QUEUE_DEPTH)
         self._thread = threading.Thread(target=self._writer, daemon=True)
         self._thread.start()
 
     def _writer(self) -> None:
-        """Drain queue and write to ffmpeg stdin (runs in background thread)."""
-        pipe = self._proc.stdin
+        """Drain queue and encode via PyAV (GIL released during x264 work)."""
+        import av
+
+        stream = self._stream
+        container = self._container
         while True:
-            data = self._q.get()
-            if data is None:
+            pil_img = self._q.get()
+            if pil_img is None:
                 break
-            pipe.write(data)  # type: ignore[union-attr]
+            vf = av.VideoFrame.from_image(pil_img)
+            for packet in stream.encode(vf):
+                container.mux(packet)
+        # Flush encoder
+        for packet in stream.encode():
+            container.mux(packet)
 
     def feed(self, frame: Image.Image) -> None:
-        """Convert frame and enqueue for writing (may block if queue is full)."""
+        """Enqueue PIL frame for encoding (may block if queue full)."""
         import time
-
-        import numpy as np
 
         from push_back.env.render import _timings
 
         _t = time.perf_counter()
-        raw = bytes(memoryview(np.asarray(frame)))
-        tobytes_dt = time.perf_counter() - _t
-        _timings["tobytes"] += tobytes_dt
+        # No tobytes needed — PyAV reads from PIL image directly
+        _timings["tobytes"] += 0.0
 
         _t2 = time.perf_counter()
-        self._q.put(raw)
+        self._q.put(frame)
         _timings["qput"] = _timings.get("qput", 0.0) + (time.perf_counter() - _t2)
 
     def finish(self) -> None:
-        """Signal writer thread to stop, wait for ffmpeg to finish."""
+        """Signal writer thread to stop, flush and close container."""
         self._q.put(None)
         self._thread.join()
-        self._proc.stdin.close()  # type: ignore[union-attr]
-        self._proc.wait()
-        if self._proc.returncode != 0:
-            raise RuntimeError(f"ffmpeg exited with code {self._proc.returncode}")
+        self._container.close()
 
 
 if __name__ == "__main__":
