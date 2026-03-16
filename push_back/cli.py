@@ -116,9 +116,12 @@ def run(
         f"bg_copy={rt['bg_copy']/n*1000:.1f} "
         f"balls={rt['balls']/n*1000:.1f} "
         f"agents={rt['agents']/n*1000:.1f} "
-        f"hud_step={rt['hud_step']/n*1000:.1f} "
-        f"hud_robot={rt['hud_robot']/n*1000:.1f} "
-        f"hud_ball={rt['hud_ball']/n*1000:.1f} "
+        f"hud_step_r={rt['hud_step_render']/n*1000:.1f} "
+        f"hud_step_p={rt['hud_step_paste']/n*1000:.1f} "
+        f"hud_robot_r={rt['hud_robot_render']/n*1000:.1f} "
+        f"hud_robot_p={rt['hud_robot_paste']/n*1000:.1f} "
+        f"hud_ball_r={rt['hud_ball_render']/n*1000:.1f} "
+        f"hud_ball_p={rt['hud_ball_paste']/n*1000:.1f} "
         f"tobytes={rt['tobytes']/n*1000:.1f} "
         f"qput={rt.get('qput',0.0)/n*1000:.1f}"
     )
@@ -127,6 +130,7 @@ def run(
 
 FPS = 10
 _QUEUE_DEPTH = 30  # buffer up to N frames before blocking the main thread
+# consumes that many frames of memory
 
 
 class _Encoder:

@@ -3,6 +3,8 @@
 Each function returns an RGBA :class:`~PIL.Image.Image` that gets pasted onto
 the frame.  Results are ``@lru_cache``-d so identical panel content across
 consecutive frames is essentially free.
+
+Cache pyramid: render_*_panel → _render_text → _render_glyph
 """
 
 from __future__ import annotations
@@ -32,14 +34,33 @@ _FONT_MD: ImageFont.FreeTypeFont = ImageFont.load_default(
 
 
 @lru_cache(maxsize=128)
+def _render_glyph(char: str, color: tuple[int, int, int]) -> Image.Image:
+    """RGBA sprite of one character, LINE_HEIGHT tall for easy composition."""
+    w = max(int(_FONT_MD.getlength(char)), 1)
+    img = Image.new("RGBA", (w, LINE_HEIGHT), (0, 0, 0, 255))
+    ImageDraw.Draw(img).text((0, 0), char, fill=color, font=_FONT_MD)
+    return img
+
+
+@lru_cache(maxsize=512)
+def _render_text(text: str, color: tuple[int, int, int]) -> Image.Image:
+    """RGBA sprite of a text string, composed from cached per-char glyphs."""
+    glyphs: list[Image.Image] = [_render_glyph(c, color) for c in text]
+    w = sum(g.width for g in glyphs)
+    img = Image.new("RGBA", (max(w, 1), LINE_HEIGHT), (0, 0, 0, 255))
+    x = 0
+    for g in glyphs:
+        img.paste(g, (x, 0))
+        x += g.width
+    return img
+
+
+@lru_cache(maxsize=128)
 def render_step_panel(step: int) -> Image.Image:
-    """Small RGBA image with 'Step N' on a black background."""
-    text = f"Step {step}"
-    bbox = _FONT_MD.getbbox(text)
-    w, h = bbox[2] + 4, bbox[3] + 4
-    img = Image.new("RGBA", (w, h), (0, 0, 0, 255))
-    draw = ImageDraw.Draw(img)
-    draw.text((2, 2), text, fill=LABEL_COLOR, font=_FONT_MD)
+    """Small RGBA image with 'Step N'."""
+    text_img = _render_text(f"Step {step}", LABEL_COLOR)
+    img = Image.new("RGBA", (text_img.width + 4, text_img.height + 4), (0, 0, 0, 255))
+    img.paste(text_img, (2, 2))
     return img
 
 
@@ -49,15 +70,14 @@ def render_robot_panel(
 ) -> Image.Image:
     """RGBA panel listing robot positions."""
     n = len(positions)
-    labels: list[str] = [f"R{i}: ({x}, {y})" for i, (x, y) in enumerate(positions)]
-    max_w = max(_FONT_MD.getbbox(l)[2] for l in labels)
-    w = max_w + 4
-    h = n * LINE_HEIGHT + 4
-    img = Image.new("RGBA", (w, h), (0, 0, 0, 255))
-    draw = ImageDraw.Draw(img)
-    for i, label in enumerate(labels):
+    lines: list[Image.Image] = []
+    for i, (x, y) in enumerate(positions):
         color = AGENT_COLORS[i] if i < len(AGENT_COLORS) else (200, 200, 200)
-        draw.text((2, 2 + i * LINE_HEIGHT), label, fill=color, font=_FONT_MD)
+        lines.append(_render_text(f"R{i}: ({x}, {y})", color))
+    max_w = max(line.width for line in lines)
+    img = Image.new("RGBA", (max_w + 4, n * LINE_HEIGHT + 4), (0, 0, 0, 255))
+    for i, line in enumerate(lines):
+        img.paste(line, (2, 2 + i * LINE_HEIGHT))
     return img
 
 
@@ -68,15 +88,12 @@ def render_ball_panel(
     """RGBA panel listing ball positions (sorted red-first)."""
     if not balls:
         return Image.new("RGBA", (1, 1), (0, 0, 0, 0))
-    labels: list[tuple[str, tuple[int, int, int]]] = []
+    lines: list[Image.Image] = []
     for idx, bx, by, bc in balls:
         c = BALL_COLORS.get(bc, (200, 200, 200))
-        labels.append((f"B{idx}: ({bx}, {by})", c))
-    max_w = max(_FONT_MD.getbbox(lbl)[2] for lbl, _ in labels)
-    w = max_w + 4
-    h = len(labels) * LINE_HEIGHT + 4
-    img = Image.new("RGBA", (w, h), (0, 0, 0, 255))
-    draw = ImageDraw.Draw(img)
-    for j, (lbl, c) in enumerate(labels):
-        draw.text((2, 2 + j * LINE_HEIGHT), lbl, fill=c, font=_FONT_MD)
+        lines.append(_render_text(f"B{idx}: ({bx}, {by})", c))
+    max_w = max(line.width for line in lines)
+    img = Image.new("RGBA", (max_w + 4, len(lines) * LINE_HEIGHT + 4), (0, 0, 0, 255))
+    for j, line in enumerate(lines):
+        img.paste(line, (2, 2 + j * LINE_HEIGHT))
     return img

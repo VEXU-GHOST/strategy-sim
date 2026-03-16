@@ -149,9 +149,10 @@ def _render_background(
     field_size = FIELD_INCHES * ppi
     img_w = field_size + MARGIN_LEFT + MARGIN_RIGHT
     img_h = field_size + MARGIN_TOP + MARGIN_BOTTOM
-    # ffmpeg needs even dimensions
-    img_w += img_w % 2
-    img_h += img_h % 2
+    # Round up to multiples of 32 so each RGB24 row is SIMD-aligned (AVX).
+    # This also satisfies ffmpeg's even-dimension requirement.
+    img_w = (img_w + 31) & ~31
+    img_h = (img_h + 31) & ~31
     img = Image.new("RGB", (img_w, img_h), FIELD_COLOR)
     draw = ImageDraw.Draw(img)
 
@@ -225,9 +226,12 @@ _timings: dict[str, float] = {
     "bg_copy": 0.0,
     "balls": 0.0,
     "agents": 0.0,
-    "hud_step": 0.0,
-    "hud_robot": 0.0,
-    "hud_ball": 0.0,
+    "hud_step_render": 0.0,
+    "hud_step_paste": 0.0,
+    "hud_robot_render": 0.0,
+    "hud_robot_paste": 0.0,
+    "hud_ball_render": 0.0,
+    "hud_ball_paste": 0.0,
     "tobytes": 0.0,
 }
 _frame_count: int = 0
@@ -342,16 +346,20 @@ def render_state(
     t = time.perf_counter()
     if step is not None:
         step_img = render_step_panel(step)
+        _timings["hud_step_render"] += time.perf_counter() - t
+        t = time.perf_counter()
         img.paste(step_img, (2, y_cursor), step_img)
         y_cursor += step_img.height + 2
-    _timings["hud_step"] += time.perf_counter() - t
+    _timings["hud_step_paste"] += time.perf_counter() - t
 
     t = time.perf_counter()
     positions = tuple((p.x, p.y) for p in state.agents)
     robot_img = render_robot_panel(positions)
+    _timings["hud_robot_render"] += time.perf_counter() - t
+    t = time.perf_counter()
     img.paste(robot_img, (2, y_cursor), robot_img)
     y_cursor += robot_img.height + 4
-    _timings["hud_robot"] += time.perf_counter() - t
+    _timings["hud_robot_paste"] += time.perf_counter() - t
 
     t = time.perf_counter()
     indexed_balls = tuple(
@@ -365,7 +373,9 @@ def render_state(
     )
     y_cursor += 20
     ball_img = render_ball_panel(indexed_balls)
+    _timings["hud_ball_render"] += time.perf_counter() - t
+    t = time.perf_counter()
     img.paste(ball_img, (2, y_cursor), ball_img)
-    _timings["hud_ball"] += time.perf_counter() - t
+    _timings["hud_ball_paste"] += time.perf_counter() - t
 
     return img

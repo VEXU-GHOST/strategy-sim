@@ -17,13 +17,13 @@ from push_back.env.state import GRID_SIZE, ROBOT_RADIUS, Heading, Pose
 class SweeperRobot(RandomRobot):
     """Sweeps the field row-by-row in a boustrophedon pattern."""
 
-    _STUCK_THRESHOLD: int = 1  # skip waypoint after N FORWARD-but-didn't-move ticks
+    _STUCK_THRESHOLD: int = 3  # skip waypoint after N FORWARD-but-didn't-move ticks
 
     def __init__(
         self,
         turn_ticks: int = 3,
         rng: np.random.Generator | None = None,
-        debug: bool = True,
+        debug: bool = False,
     ) -> None:
         super().__init__(turn_ticks=turn_ticks, rng=rng)
         self._debug: bool = debug
@@ -50,21 +50,22 @@ class SweeperRobot(RandomRobot):
 
     @staticmethod
     def _generate_waypoints() -> list[tuple[int, int]]:
-        """Row-endpoint waypoints for a full-field boustrophedon sweep.
+        """Start-and-end waypoints per row for a boustrophedon sweep.
 
-        Generates only the turning-point at the end of each row.
-        The robot's navigator steers through each waypoint in order,
-        producing a lawn-mower path across the field::
+        Each row has two waypoints: the *start* (where the robot enters
+        the row after transitioning) and the *end* (the far side).  This
+        means skipping a single waypoint on stuck loses at most half a
+        row of coverage rather than an entire row::
 
             min_c              max_c
               |                  |
-              |  *→→→→→→→→→→→→→*  y = min_c      wp 0
-              |                 ↑
-              |  *←←←←←←←←←←←←*  y = min_c + 1  wp 1
-              |  ↑
-              |  *→→→→→→→→→→→→→*  y = min_c + 2  wp 2
-              |                 ↑
-              |  *←←←←←←←←←←←←*  y = min_c + 3  wp 3
+              |  S→→→→→→→→→→→→E  y = min_c       wp 0-1
+              |                ↓
+              |  E←←←←←←←←←←←←S  y = min_c + 1   wp 2-3
+              |  ↓
+              |  S→→→→→→→→→→→→E  y = min_c + 2   wp 4-5
+              |                ↓
+              |  E←←←←←←←←←←←←S  y = min_c + 3   wp 6-7
               |  :
         """
         margin: int = ROBOT_RADIUS
@@ -73,11 +74,16 @@ class SweeperRobot(RandomRobot):
 
         waypoints: list[tuple[int, int]] = []
         going_right: bool = True
-        for y in range(min_c, max_c + 1):
+        for i, y in enumerate(range(min_c, max_c + 1)):
             if going_right:
-                waypoints.append((max_c, y))
+                start_x, end_x = min_c, max_c
             else:
-                waypoints.append((min_c, y))
+                start_x, end_x = max_c, min_c
+            # First row: robot is already at the start edge, skip the
+            # start waypoint so it doesn't pointlessly navigate to itself.
+            if i > 0:
+                waypoints.append((start_x, y))
+            waypoints.append((end_x, y))
             going_right = not going_right
         return waypoints
 
@@ -124,7 +130,6 @@ class SweeperRobot(RandomRobot):
 
         if not self._initialized:
             self._waypoints = self._generate_waypoints()
-            print(self._waypoints)
             self._initialized = True
 
         # Stuck detection: count ticks where we sent FORWARD but didn't move.
@@ -138,14 +143,6 @@ class SweeperRobot(RandomRobot):
         if self._stuck_ticks >= self._STUCK_THRESHOLD and self._wp_index < len(
             self._waypoints
         ):
-            # Instead of blindly skipping to the next row's far endpoint
-            # (which backtracks across already-swept ground), insert a
-            # transition waypoint at (current_x, next_row_y) so the robot
-            # drops down one row from where it is and sweeps onward.
-            if self._wp_index + 1 < len(self._waypoints):
-                _, next_y = self._waypoints[self._wp_index + 1]
-                transition: tuple[int, int] = (pose.x, next_y)
-                self._waypoints.insert(self._wp_index + 1, transition)
             self._wp_index += 1
             self._stuck_ticks = 0
 

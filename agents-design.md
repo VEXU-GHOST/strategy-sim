@@ -372,3 +372,39 @@ Added per-phase timing accumulators in `render.py` (`_timings` dict) with `get_r
 - `cli.py`: `_Encoder` class (threaded ffmpeg writer with `queue.Queue`), 1 MB pipe buffer, streaming encode, per-phase timing breakdown + drain timer.
 - `runner.py`: **Deleted** — `run_sim()`/`save_frames()` superseded by CLI streaming encoder.
 - `runs/default.py`: **Deleted** — legacy entrypoint superseded by `push-back` CLI.
+
+---
+
+## 2026-03-16: HUD lru_cache pyramid + encode_to_file experiment (Copilot)
+
+**Agent**: GitHub Copilot (Claude Opus 4.6)
+
+### HUD cache pyramid refactor
+
+**Task**: Replace bespoke module-level glyph pre-rendering with a clean `@lru_cache` pyramid.
+
+**Before**: `render_hud.py` had imperative module-level code eagerly building `_DIGIT_GLYPHS` list and `_PREFIX_IMG` at import time. `render_robot_panel` and `render_ball_panel` used `draw.text()` directly (slow on cache miss).
+
+**After**: Three-layer `@lru_cache` pyramid:
+1. `_render_glyph(char, color)` → single-character RGBA sprite (128 slots)
+2. `_render_text(text, color)` → composites glyphs horizontally (512 slots)
+3. `render_*_panel(...)` → composites text lines into panels (32–128 slots)
+
+**Benefit**: Cleaner code, no module-level side effects. Robot/ball panels now benefit from per-line text caching — when only one robot moves, unchanged lines hit `_render_text` cache.
+
+**Result**: hud_robot_r dropped from 0.2ms → 0.0ms. hud_step_r went from 0.0ms → 0.1ms (slight regression from glyph-per-char composition vs old prefix sprite, acceptable for code clarity).
+
+### Pillow encode_to_file experiment
+
+**Task**: Test whether Pillow's internal `_getencoder(...).encode_to_file(fd, bufsize)` can bypass both `tobytes()` chunked Python loop and the threading queue, writing raw pixels from C directly to the ffmpeg pipe fd.
+
+**Reference**: [Pillow #5049](https://github.com/python-pillow/Pillow/issues/5049) — `tobytes()` internally loops in Python with 64KB chunks. For our ~830KB frames (576×480×3) that's ~13 iterations. The C encoder can write the full image in one call via `encode_to_file(fd, bufsize)`.
+
+**Current path**: `bytes(memoryview(np.asarray(frame)))` → `queue.put(raw)` → writer thread → `stdin.write(raw)`.
+
+**Proposed path**: `encoder.encode_to_file(pipe_fd, full_bufsize)` — zero Python-level copies, no bytes allocation, no queue.
+
+**Tradeoff**: Loses threading overlap between render and encode. At 1050 steps current qput shows 0.0–0.5ms variance (often blocking on pipe), so the threading benefit may be small.
+
+### Files changed
+- `render_hud.py`: Removed `_DIGIT_GLYPHS`, `_DIGIT_H`, `_PREFIX_IMG`, `_PREFIX_TEXT` module globals. Added `_render_glyph()`, `_render_text()`. Rewrote `render_step_panel`, `render_robot_panel`, `render_ball_panel` to use the cache pyramid.
