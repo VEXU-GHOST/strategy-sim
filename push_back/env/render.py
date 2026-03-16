@@ -213,9 +213,9 @@ def _render_background(
     draw.ellipse([ox - 8, oy - 8, ox + 8, oy + 8], fill=LABEL_COLOR)
     draw.text((ox + 8, oy - 8), "(0,0)", fill=LABEL_COLOR, font=_FONT_MD)
     ex, ey = _to_px(FIELD_INCHES // CELL_SIZE, 0)
-    draw.text((ex, ey - 25), "+x 180°", fill=LABEL_COLOR, font=_FONT_MD)
+    draw.text((ex + 5, ey - 15), "+x 180°", fill=LABEL_COLOR, font=_FONT_MD)
     yx, yy = _to_px(0, FIELD_INCHES // CELL_SIZE + 1)
-    draw.text((yx, yy - 25), "+y 90°", fill=LABEL_COLOR, font=_FONT_MD)
+    draw.text((yx, yy), "+y 90°", fill=LABEL_COLOR, font=_FONT_MD)
 
     return img
 
