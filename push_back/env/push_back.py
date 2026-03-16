@@ -202,7 +202,7 @@ class PushBackEnv(ParallelEnv):
 
     def render(self, *, draw_grid: bool = False) -> np.ndarray | None:
         """Render current state. Returns HWC uint8 array or None."""
-        img = render_state(self.state, draw_grid=draw_grid)
+        img = render_state(self.state, draw_grid=draw_grid, step=self.state.timestep)
         if self.render_mode == "human":
             img.show()
             return None

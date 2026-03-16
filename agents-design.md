@@ -301,3 +301,13 @@ BaseRobot (ABC)
 - `.gitignore`: Added `outputs` directory.
 - `README.md`: Updated CLI usage examples for new dual-output format.
 - `AGENTS.md`: Added minimal quick-start documentation convention.
+
+## 2026-03-15: mpv docs & remove PNG output (Copilot)
+
+**Agent**: GitHub Copilot (Claude Opus 4.6)
+
+**Changes**:
+- `README.md`: Added "Viewing Output" section documenting `mpv` keybinds (frame stepping, speed, pause) and commands for GIF/image-sequence/frame-overlay playback.
+- `cli.py`: Removed PNG output path. `--out` now always produces a GIF (`.gif` appended if missing). Removed dual-output mode.
+- `runner.py`: `save_frames()` always saves GIF; removed PNG branch.
+- `README.md`: Updated CLI usage comments to reflect GIF-only output.

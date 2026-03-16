@@ -35,24 +35,43 @@ def run_sim(
     return frames
 
 
-def save_frames(frames: list[np.ndarray], out: Path, fps: int = 10) -> None:
-    """Save frames as an animated GIF or numbered PNGs."""
-    from PIL import Image
+FPS = 10
 
+
+def save_frames(frames: list[np.ndarray], out: Path) -> None:
+    """Save frames as MP4 via ffmpeg (piped rawvideo)."""
+    import subprocess
+
+    if out.suffix != ".mp4":
+        out = out.with_suffix(".mp4")
     out.parent.mkdir(parents=True, exist_ok=True)
-    images = [Image.fromarray(f) for f in frames]
-
-    if out.suffix == ".gif":
-        images[0].save(
-            out,
-            save_all=True,
-            append_images=images[1:],
-            duration=1000 // fps,
-            loop=0,
-        )
-    else:
-        stem = out.with_suffix("")
-        for i, img in enumerate(images):
-            img.save(f"{stem}_{i:03d}.png")
-
+    h, w = frames[0].shape[:2]
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-loglevel",
+        "warning",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "-s",
+        f"{w}x{h}",
+        "-r",
+        str(FPS),
+        "-i",
+        "pipe:",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        str(out),
+    ]
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+    for frame in frames:
+        proc.stdin.write(np.asarray(frame).tobytes())  # type: ignore[union-attr]
+    proc.stdin.close()  # type: ignore[union-attr]
+    proc.wait()
+    if proc.returncode != 0:
+        raise RuntimeError(f"ffmpeg exited with code {proc.returncode}")
     print(f"saved {len(frames)} frames → {out}")

@@ -138,6 +138,14 @@ class SweeperRobot(RandomRobot):
         if self._stuck_ticks >= self._STUCK_THRESHOLD and self._wp_index < len(
             self._waypoints
         ):
+            # Instead of blindly skipping to the next row's far endpoint
+            # (which backtracks across already-swept ground), insert a
+            # transition waypoint at (current_x, next_row_y) so the robot
+            # drops down one row from where it is and sweeps onward.
+            if self._wp_index + 1 < len(self._waypoints):
+                _, next_y = self._waypoints[self._wp_index + 1]
+                transition: tuple[int, int] = (pose.x, next_y)
+                self._waypoints.insert(self._wp_index + 1, transition)
             self._wp_index += 1
             self._stuck_ticks = 0
 

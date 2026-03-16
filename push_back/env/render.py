@@ -140,11 +140,18 @@ def _draw_agent(
 
 
 def render_state(
-    state: WorldState, ppi: int = PPI, *, draw_grid: bool = False
+    state: WorldState,
+    ppi: int = PPI,
+    *,
+    draw_grid: bool = False,
+    step: int | None = None,
 ) -> Image.Image:
     """Return a PIL Image of the current field state."""
     field_size = FIELD_INCHES * ppi
     total = field_size + 2 * IMG_MARGIN
+    # h264 yuv420p needs even dimensions
+    if total % 2:
+        total += 1
     img = Image.new("RGB", (total, total), FIELD_COLOR)
     draw = ImageDraw.Draw(img)
 
@@ -264,5 +271,51 @@ def render_state(
     # +y axis label at far end
     yx, yy = _to_px(0, FIELD_INCHES // CELL_SIZE + 1)
     draw.text((yx, yy - 25), "+y 90°", fill=LABEL_COLOR, font=label_font)
+
+    # step number (top-left corner)
+    if step is not None:
+        bbox = label_font.getbbox(f"Step {step}")
+        draw.rectangle(
+            [8, 8, 12 + bbox[2], 12 + bbox[3]],
+            fill=(0, 0, 0),
+        )
+        draw.text((10, 10), f"Step {step}", fill=LABEL_COLOR, font=label_font)
+
+    # robot locations (below step number)
+    y_start = 35 if step is not None else 10
+    line_height = 22
+    # background for all robot labels
+    max_label = max(
+        (
+            label_font.getbbox(f"R{i}: ({p.x}, {p.y})")[2]
+            for i, p in enumerate(state.agents)
+        ),
+        default=0,
+    )
+    bg_bottom = y_start + len(state.agents) * line_height + 2
+    draw.rectangle([8, y_start - 2, 12 + max_label, bg_bottom], fill=(0, 0, 0))
+    for i, pose in enumerate(state.agents):
+        color = AGENT_COLORS[i] if i < len(AGENT_COLORS) else (200, 200, 200)
+        label = f"R{i}: ({pose.x}, {pose.y})"
+        draw.text((10, y_start + i * line_height), label, fill=color, font=label_font)
+
+    # ball locations (below robots, separated by a blank line)
+    ball_y = bg_bottom + line_height
+    # sort: red balls first then blue, each group by original index
+    indexed_balls = [
+        (i, int(row[0]), int(row[1]), int(row[2]))
+        for i, row in enumerate(state.balls_on_field)
+    ]
+    indexed_balls.sort(key=lambda b: (b[3], b[0]))
+    ball_labels: list[tuple[str, tuple[int, int, int]]] = []
+    for idx, bx, by, bc in indexed_balls:
+        c = BALL_COLORS.get(bc, (200, 200, 200))
+        ball_labels.append((f"B{idx}: ({bx}, {by})", c))
+    if ball_labels:
+        max_ball_w = max(label_font.getbbox(lbl)[2] for lbl, _ in ball_labels)
+        ball_bg_bottom = ball_y + len(ball_labels) * line_height + 2
+        draw.rectangle([8, ball_y - 2, 12 + max_ball_w, ball_bg_bottom], fill=(0, 0, 0))
+        for j, (lbl, c) in enumerate(ball_labels):
+            draw.text((10, ball_y + j * line_height), lbl, fill=c, font=label_font)
 
     return img

@@ -14,9 +14,8 @@ from push_back.runner import run_sim, save_frames
 
 STEPS: int = 600
 SEED: int = 42
-FPS: int = 10
 DRAW_GRID: bool = True
-OUT: Path = Path("output/default.gif")
+OUT: Path = Path("output/default.mp4")
 
 # Robots — change these to try different strategies.
 robots: dict[str, BaseRobot] = {
@@ -39,4 +38,4 @@ if __name__ == "__main__":
     env.reset(seed=SEED, options={"balls": INITIAL_BALLS})
 
     frames = run_sim(env, robots, steps=STEPS, draw_grid=DRAW_GRID)
-    save_frames(frames, OUT, fps=FPS)
+    save_frames(frames, OUT)
