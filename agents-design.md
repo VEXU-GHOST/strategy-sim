@@ -461,5 +461,7 @@ vf = av.VideoFrame.from_numpy_buffer(npy, format="rgb24")
 - Encode improvement: ~14% (0.44→0.38s)
 - Best run: **0.88s** (sub-1s target achieved)
 
+**Also tested (rejected):** Multi-threaded x264 encoding (`thread_count=4, thread_type=3`). Encode time halved (0.44→0.18s) but GIL contention from 4 encoder threads inflated render time by the same amount (0.54→0.82s). Total: wash (~1.05s). At 576×480 the per-frame encode is so short that thread dispatch overhead + GIL pressure dominate.
+
 ### Files changed
 - `cli.py`: `_writer()` now uses `np.asarray()` + `av.VideoFrame.from_numpy_buffer()` instead of `av.VideoFrame.from_image()`.
