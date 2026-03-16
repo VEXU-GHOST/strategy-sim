@@ -26,6 +26,9 @@ def run(
     ),
     seed: int = typer.Option(42, help="Random seed for reproducibility."),
     grid: bool = typer.Option(False, "--grid", help="Draw grid lines on the field."),
+    play: bool = typer.Option(
+        False, "--play", help="Open output in mpv after rendering."
+    ),
     balls: Optional[str] = typer.Option(
         None,
         "--balls",
@@ -133,6 +136,11 @@ def run(
     )
     typer.echo(f"saved {frame_count} frames → {out}")
 
+    if play:
+        import subprocess
+
+        subprocess.run(["mpv", "--loop", str(out), "--pause", "--window-scale=2"])
+
 
 FPS = 10
 _QUEUE_DEPTH = 30  # buffer up to N frames before blocking the main thread
@@ -151,12 +159,12 @@ class _Encoder:
         w, h = size
         self._container: av.container.OutputContainer = av.open(str(out), mode="w")
         self._stream: av.video.stream.VideoStream = self._container.add_stream(
-            "libx264rgb", rate=FPS
+            "libx264", rate=FPS
         )
         self._stream.width = w
         self._stream.height = h
-        self._stream.pix_fmt = "rgb24"
-        self._stream.options = {"preset": "ultrafast"}
+        self._stream.pix_fmt = "yuv420p"
+        self._stream.options = {"preset": "veryfast"}
 
         self._q: queue.Queue[Image.Image | None] = queue.Queue(maxsize=_QUEUE_DEPTH)
         self._thread = threading.Thread(target=self._writer, daemon=True)

@@ -16,9 +16,11 @@ source .venv/bin/activate
 pip install -e .
 bash scripts/setup.sh
 
-# run the CLI (outputs MP4 by default, requires ffmpeg)
+# minimal run (600 steps, output/output.mp4)
 push-back
-push-back --steps 120 --out outputs/demo
+
+# common usage
+push-back --steps 1200 --out outputs/demo --play
 ```
 
 ## Project Structure
@@ -26,37 +28,34 @@ push-back --steps 120 --out outputs/demo
 ```
 push_back/
     __init__.py
-    cli.py                  # typer CLI
+    cli.py                  # typer CLI + PyAV threaded encoder
     env/
         __init__.py
         push_back.py        # PushBackEnv(ParallelEnv)
         state.py            # WorldState, Goal, BallColor, constants
         field.py            # make_default_goals(), field dimensions
         render.py           # Pillow renderer
+        render_hud.py       # LRU-cached HUD panels
         planner.py          # greedy grid pathfinder
+        collision.py        # segment-based collision geometry
         robots/
             __init__.py
             base.py         # BaseRobot ABC, BaseObservation
             stand_still.py  # StandStill (no-op robot)
             random_robot.py # RandomRobot (4-action kinematics)
             high_level.py   # GoToRobot (options / macro-actions)
+            sweeper.py      # SweeperRobot (autonomous ball collection)
 scripts/
     setup.sh                # installs dev deps + pre-commit hook
+    compress.sh             # re-encode for smaller file size (Discord sharing)
 ```
 
 ## Viewing Output
 
-[mpv](https://mpv.io/) is the easiest way to inspect simulation output frame-by-frame.
+`--play` opens mpv automatically after rendering. For manual playback:
 
 ```bash
-# play the output
-mpv --loop outputs/demo.mp4 --pause
-
-# 2x zoom (video is 1128×960 native)
 mpv --loop outputs/demo.mp4 --pause --window-scale=2
-
-# start at a specific time (e.g. 5s = step 50 at 10 fps)
-mpv --loop outputs/demo.mp4 --pause --start=5
 ```
 
 Useful keybinds (at 10 fps):
@@ -74,40 +73,50 @@ Useful keybinds (at 10 fps):
 A typical run produces output like:
 
 ```
-sim: 0.16s (0.2 ms/step) | render: 1.06s (1.2 ms/frame) | encode: 0.93s (1.0 ms/frame) | drain: 0.12s | total: 2.16s
-  render breakdown (ms/frame): bg_hash=0.0 bg_copy=0.2 balls=0.1 agents=0.1 hud_step=0.4 hud_robot=0.3 hud_ball=0.1 tobytes=0.3
-saved 901 frames → outputs/demo.mp4
+encoder thread (ms/frame): qget=0.02 asarray=0.151 from_buf=0.018 encode=0.43 mux=0.010 | total=0.63 flush=0.7ms(total)
+sim: 0.07s (0.07 ms/step) | render: 0.54s (0.52 ms/frame) | encode: 0.01s (0.01 ms/frame) | drain: 0.00s | total: 0.63s (0.59 ms/frame)
+  render breakdown (ms/frame): bg_hash=0.01 bg_render=0.01 bg_copy=0.21 balls=0.03 agents=0.11 ...
+  feed breakdown (ms/frame): tobytes=0.00 qput=0.00
 ```
 
 ### Top-level timings
 
-Each frame goes through: **sim → render → encode** (piped to ffmpeg via threaded writer).
+Each frame goes through: **sim → render → encode** (piped to PyAV via threaded writer).
 
 | Timer | What it measures |
 |-------|------------------|
-| **sim** | Physics step: build observations, call each robot's `tick()`, `env.step()`. Purely CPU, no I/O. |
-| **render** | Pillow drawing: copy cached background, draw balls, paste agent sprites, paste HUD panels. Returns a PIL Image. |
-| **encode** | Time spent on `enc.feed()` — converts frame to bytes and enqueues for the writer thread. Blocks only if the 30-frame queue is full (backpressure from ffmpeg). Includes drain time. |
-| **drain** | Time spent in `enc.finish()` waiting for the writer thread to flush remaining queued frames and ffmpeg to exit. Subset of encode. |
-| **total** | Wall-clock for the sim loop (sim + render + encode interleaved). |
+| **sim** | Physics step: build observations, call each robot's `tick()`, `env.step()`. |
+| **render** | Pillow drawing: copy cached background, draw balls, paste agent sprites, paste HUD panels. |
+| **encode** | Time in `enc.feed()` — enqueues PIL image for the writer thread. Blocks only if the 30-frame queue is full. |
+| **drain** | Time in `enc.finish()` flushing remaining queued frames. Subset of encode. |
+| **total** | Wall-clock for the full loop. |
 
-**Parallelism**: A background thread writes frames to ffmpeg's stdin pipe (1 MB buffer). While Python renders frame N+1, the writer thread pushes frame N to ffmpeg which encodes concurrently. The queue (depth 30) absorbs burst mismatches.
+**Parallelism**: A background thread encodes frames via PyAV (libx264rgb). While Python renders frame N+1, the encoder thread converts frame N to x264. The queue (depth 30) absorbs burst mismatches.
 
 ```
-Python:    [sim][render][enqueue][sim][render][enqueue]...[drain]
-Writer:         [pipe write N-1 ][pipe write N        ]...
-ffmpeg:         [encode N-1     ][encode N            ]...
+Main thread:    [sim][render][enqueue][sim][render][enqueue]...[drain]
+Encoder thread:      [asarray+encode N-1][asarray+encode N]...
 ```
 
 ### Render breakdown
 
 | Phase | What it draws |
 |-------|---------------|
-| **bg_hash** | Build hashable keys (frozenset/tuples) from state for LRU cache lookup. |
-| **bg_copy** | `Image.copy()` of the cached static background. Single largest cost — a full-frame memcpy each frame. |
+| **bg_hash** | Build hashable keys (frozenset/tuples) for LRU cache lookup. |
+| **bg_render** | LRU-cached static background (grid, border, goals, axis labels). |
+| **bg_copy** | `Image.copy()` — full-frame memcpy of the cached background. |
 | **balls** | Aggregate balls by cell, draw colored circles/pie slices + count text. |
 | **agents** | Look up LRU-cached robot sprites, `img.paste()` at grid positions. |
-| **hud_step** | Paste the step-counter panel (LRU-cached by step number). |
-| **hud_robot** | Paste the robot-positions panel (LRU-cached by position tuple). |
-| **hud_ball** | Paste the ball-list panel (LRU-cached by ball state tuple). |
-| **tobytes** | `bytes(memoryview(np.asarray(frame)))` — frame-to-bytes conversion for the ffmpeg pipe. |
+| **hud_step_r/p** | Render / paste the step-counter panel. |
+| **hud_robot_r/p** | Render / paste the robot-positions panel. |
+| **hud_ball_r/p** | Render / paste the ball-list panel. |
+
+### Encoder thread breakdown
+
+| Phase | What it does |
+|-------|---------------|
+| **qget** | Wait for next frame from queue. |
+| **asarray** | `np.asarray(pil_img)` — PIL→numpy (internal copy via `__array_interface__`). |
+| **from_buf** | `av.VideoFrame.from_numpy_buffer()` — pointer setup, ~zero cost. |
+| **encode** | x264 encode (libx264rgb ultrafast, releases GIL). |
+| **mux** | Write encoded packet to MP4 container. |
