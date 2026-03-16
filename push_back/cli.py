@@ -37,6 +37,7 @@ def run(
     from push_back.env.robots import GoToRobot, RandomRobot, StandStill, SweeperRobot
     from push_back.env.push_back import PushBackEnv
     from push_back.env.robots.base import BaseRobot
+    from PIL import Image
     import numpy as np
 
     # Demo: red agents use macro GoTo actions, blue agents use primitives
@@ -63,69 +64,146 @@ def run(
     from tqdm import trange
     import time
 
+    from push_back.env.render import get_render_timings, _timings
+
     _obs, _infos = env.reset(seed=seed, options={"balls": initial_balls})
 
-    frames = [env.render(draw_grid=grid)]
+    if out.suffix != ".mp4":
+        out = out.with_suffix(".mp4")
+
+    first_frame = env.render(draw_grid=grid)
+    enc = _Encoder(first_frame.size, out)
+    enc.feed(first_frame)
+    frame_count = 1
+
     t0 = time.perf_counter()
+    sim_dt: float = 0.0
+    render_dt: float = 0.0
+    encode_dt: float = 0.0
     for i in trange(steps, desc="simulating", miniters=steps // 20):
+        t_sim = time.perf_counter()
         obs = BaseRobot.build_obs(env.state)
         actions: dict[str, int] = {
             name: robots[name].tick(obs, idx)
             for idx, name in enumerate(env.possible_agents)
         }
         _obs, _rewards, _terms, _truncs, _infos = env.step(actions)
+        sim_dt += time.perf_counter() - t_sim
+        t_render = time.perf_counter()
         frame = env.render(draw_grid=grid)
-        frames.append(frame)
-    sim_dt = time.perf_counter() - t0
-    typer.echo(f"sim: {sim_dt:.2f}s ({sim_dt / steps * 1000:.1f} ms/step)")
-
-    if out.suffix != ".mp4":
-        out = out.with_suffix(".mp4")
-    t1 = time.perf_counter()
-    _save(frames, out)
-    save_dt = time.perf_counter() - t1
-    typer.echo(f"saved {len(frames)} frames → {out} ({save_dt:.2f}s)")
+        render_dt += time.perf_counter() - t_render
+        t_enc = time.perf_counter()
+        enc.feed(frame)
+        encode_dt += time.perf_counter() - t_enc
+        frame_count += 1
+    t_enc = time.perf_counter()
+    enc.finish()
+    drain_dt = time.perf_counter() - t_enc
+    encode_dt += drain_dt
+    total_dt = time.perf_counter() - t0
+    typer.echo(
+        f"sim: {sim_dt:.2f}s ({sim_dt / steps * 1000:.1f} ms/step) | "
+        f"render: {render_dt:.2f}s ({render_dt / steps * 1000:.1f} ms/frame) | "
+        f"encode: {encode_dt:.2f}s ({encode_dt / frame_count * 1000:.1f} ms/frame) | "
+        f"drain: {drain_dt:.2f}s | "
+        f"total: {total_dt:.2f}s"
+    )
+    rt = get_render_timings()
+    n = rt["frames"] or 1
+    typer.echo(
+        f"  render breakdown (ms/frame): "
+        f"bg_hash={rt['bg_hash']/n*1000:.1f} "
+        f"bg_copy={rt['bg_copy']/n*1000:.1f} "
+        f"balls={rt['balls']/n*1000:.1f} "
+        f"agents={rt['agents']/n*1000:.1f} "
+        f"hud_step={rt['hud_step']/n*1000:.1f} "
+        f"hud_robot={rt['hud_robot']/n*1000:.1f} "
+        f"hud_ball={rt['hud_ball']/n*1000:.1f} "
+        f"tobytes={rt['tobytes']/n*1000:.1f}"
+    )
+    typer.echo(f"saved {frame_count} frames → {out}")
 
 
 FPS = 10
+_QUEUE_DEPTH = 30  # buffer up to N frames before blocking the main thread
 
 
-def _save(frames: list, out: Path) -> None:
-    """Save frames as MP4 via ffmpeg (piped rawvideo)."""
-    import subprocess
+class _Encoder:
+    """Threaded ffmpeg encoder — writes happen on a background thread."""
 
-    import numpy as np
+    def __init__(self, size: tuple[int, int], out: Path) -> None:
+        import fcntl
+        import subprocess
 
-    out.parent.mkdir(parents=True, exist_ok=True)
-    h, w = frames[0].shape[:2]
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-loglevel",
-        "warning",
-        "-f",
-        "rawvideo",
-        "-pix_fmt",
-        "rgb24",
-        "-s",
-        f"{w}x{h}",
-        "-r",
-        str(FPS),
-        "-i",
-        "pipe:",
-        "-c:v",
-        "libx264",
-        "-pix_fmt",
-        "yuv420p",
-        str(out),
-    ]
-    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
-    for frame in frames:
-        proc.stdin.write(np.asarray(frame).tobytes())  # type: ignore[union-attr]
-    proc.stdin.close()  # type: ignore[union-attr]
-    proc.wait()
-    if proc.returncode != 0:
-        raise RuntimeError(f"ffmpeg exited with code {proc.returncode}")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        w, h = size
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            "warning",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "-s",
+            f"{w}x{h}",
+            "-r",
+            str(FPS),
+            "-i",
+            "pipe:",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-pix_fmt",
+            "yuv420p",
+            str(out),
+        ]
+        self._proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+        F_SETPIPE_SZ = 1031
+        try:
+            fcntl.fcntl(self._proc.stdin.fileno(), F_SETPIPE_SZ, 1024 * 1024)  # type: ignore[union-attr]
+        except OSError:
+            pass
+
+        import queue
+        import threading
+
+        self._q: queue.Queue[bytes | None] = queue.Queue(maxsize=_QUEUE_DEPTH)
+        self._thread = threading.Thread(target=self._writer, daemon=True)
+        self._thread.start()
+
+    def _writer(self) -> None:
+        """Drain queue and write to ffmpeg stdin (runs in background thread)."""
+        pipe = self._proc.stdin
+        while True:
+            data = self._q.get()
+            if data is None:
+                break
+            pipe.write(data)  # type: ignore[union-attr]
+
+    def feed(self, frame: Image.Image) -> None:
+        """Convert frame and enqueue for writing (may block if queue is full)."""
+        import time
+
+        import numpy as np
+
+        from push_back.env.render import _timings
+
+        _t = time.perf_counter()
+        raw = bytes(memoryview(np.asarray(frame)))
+        _timings["tobytes"] += time.perf_counter() - _t
+        self._q.put(raw)
+
+    def finish(self) -> None:
+        """Signal writer thread to stop, wait for ffmpeg to finish."""
+        self._q.put(None)
+        self._thread.join()
+        self._proc.stdin.close()  # type: ignore[union-attr]
+        self._proc.wait()
+        if self._proc.returncode != 0:
+            raise RuntimeError(f"ffmpeg exited with code {self._proc.returncode}")
 
 
 if __name__ == "__main__":

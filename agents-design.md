@@ -311,3 +311,64 @@ BaseRobot (ABC)
 - `cli.py`: Removed PNG output path. `--out` now always produces a GIF (`.gif` appended if missing). Removed dual-output mode.
 - `runner.py`: `save_frames()` always saves GIF; removed PNG branch.
 - `README.md`: Updated CLI usage comments to reflect GIF-only output.
+
+## 2026-03-15: Sweeper stuck-recovery improvement (Copilot)
+
+**Agent**: GitHub Copilot (Claude Opus 4.6)
+
+**Task**: Fix sweeper boustrophedon algorithm's stuck recovery — previously skipped entire rows when hitting obstacles near row endpoints.
+
+**Changes** (two iterations):
+1. *First attempt (broken)*: Inserted transition waypoints at `(current_x, next_row_y)` on stuck. This caused an infinite insertion loop — if the transition point was also unreachable, each tick inserted another copy and advanced `wp_index`, bloating the list to 800+ entries while the robot sat still.
+2. *Final fix*: Reverted stuck-recovery to simple `_wp_index += 1`. Instead changed `_generate_waypoints()` to emit **two waypoints per row** (start + end) so each skip loses at most half a row. Bumped `_STUCK_THRESHOLD` from 1→3 to reduce premature skips.
+
+---
+
+## 2026-03-15: Render pipeline optimization (Copilot)
+
+**Agent**: GitHub Copilot (Claude Opus 4.6)
+
+**Task**: Optimize render + encode pipeline. Started at ~13 ms/frame render + sequential ffmpeg encode.
+
+### Optimization rounds
+
+| Round | Change | Before | After |
+|-------|--------|--------|-------|
+| 1 | Cache fonts at module level (`_FONT_SM/MD/LG`); use `stroke_width` param instead of 28-call outline hack | 19.3 ms/frame | 6.7 ms/frame |
+| 2 | Cache static background (grid, border, blocked cells, collision segments, goals, labels) — reuse via `.copy()` | 6.7 ms/frame | 5.6 ms/frame |
+| 3 | LRU-cached robot sprites (`_make_agent_sprite`); extracted HUD panels to `render_hud.py` with `@lru_cache` | 5.6 ms/frame | 3.0 ms/frame |
+| 4 | Eliminated `np.array(img)` conversion — return PIL `Image` directly from `render()`, pipe `img.tobytes()` to ffmpeg | 4.6 ms/frame* | 2.4 ms/frame |
+| 5 | Replaced manual `_bg_cache` globals with `@lru_cache(maxsize=2)` on `_render_background` using hashable geometry args (`frozenset`, tuples) | — | Code cleanup (same perf) |
+| 6 | Streaming ffmpeg: start encoder before sim loop, pipe each frame immediately after rendering (overlap encode with next render) | 6.8s total | **4.4s total** |
+| 7 | 1 MB pipe buffer (`fcntl F_SETPIPE_SZ`) — reduces backpressure from ffmpeg | — | Slight reduce in encode blocking |
+| 8 | Threaded writer: `_Encoder` class with `queue.Queue(maxsize=30)` and background writer thread — encoding fully overlapped with rendering | 4.4s total | **4.0s total** (drain ≈0.15s) |
+| 9 | PPI 5→3: halved resolution (field 720→432 px). Fonts scaled proportionally (`max(8, int(12*PPI/5))` etc.) | 4.0s total | **1.6s total** (2.5×) |
+| 10 | Per-side margins: replaced uniform `IMG_MARGIN=25*PPI` with `MARGIN_LEFT/TOP/RIGHT/BOTTOM`. Image no longer square — sized to content. | 582×582 | 508×480 (−32% pixels) |
+| 11 | HUD sidebar: scaled `render_hud.py` font/line-height with PPI. Moved HUD panels into left margin (no field overlap). | HUD overlaps field | Clean sidebar |
+| 12 | PPI 3→6: doubled resolution for legibility while keeping previous optimizations | 1.6s total | **2.2s total** (1128×960) |
+| 13 | Drain timer: explicit `drain` field in timing output showing `enc.finish()` wait time | — | Observability |
+| 14 | Dead code removal: deleted `runner.py` (`run_sim`/`save_frames`) and `runs/default.py` — CLI supersedes both | — | Code cleanup |
+
+*\*Round 4 "before" measured total render including np.array that was previously uncaptured.*
+
+### Granular timing instrumentation
+
+Added per-phase timing accumulators in `render.py` (`_timings` dict) with `get_render_timings()`. Phases tracked: `bg_hash`, `bg_copy`, `balls`, `agents`, `hud_step`, `hud_robot`, `hud_ball`, `tobytes`. CLI prints breakdown after simulation.
+
+### Key findings
+
+- `bg_copy` (PIL `Image.copy()`) is the dominant render cost — irreducible since we need a clean canvas for dynamic elements each frame.
+- `np.array(img)` was costing 2.1 ms/frame (65% of render time before removal). PIL's `.tobytes()` is ~0 ms — C-level memcpy vs numpy overhead.
+- ffmpeg preset comparison (9 configs tested): spread was narrow (4.2–5.9s for 901 frames). `veryfast` chosen — only 0.3s slower than `ultrafast` with much better compression (538K vs 1.5MB).
+- Streaming + threaded ffmpeg overlaps encoding with rendering. Queue depth of 30 frames smooths bursts; drain time is typically <0.2s.
+- Per-side margins saved ~32% pixel area (PPI=3) by not wasting space on sides with no content.
+- At PPI=6 the whole pipeline (900 steps, 901 frames, 1128×960) runs in ~2.2s wall-clock.
+
+### Files changed
+
+- `render.py`: Font caching, background `@lru_cache`, sprite `@lru_cache`, per-phase timing, per-side margins (`MARGIN_LEFT/TOP/RIGHT/BOTTOM`), PPI-scaled fonts, removed dead code (`_draw_goal`, manual cache globals).
+- `render_hud.py` (new): `render_step_panel`, `render_robot_panel`, `render_ball_panel` — all `@lru_cache`-wrapped, font/line-height scaled with PPI.
+- `push_back.py`: `render()` returns `PIL.Image.Image` instead of `np.ndarray`.
+- `cli.py`: `_Encoder` class (threaded ffmpeg writer with `queue.Queue`), 1 MB pipe buffer, streaming encode, per-phase timing breakdown + drain timer.
+- `runner.py`: **Deleted** — `run_sim()`/`save_frames()` superseded by CLI streaming encoder.
+- `runs/default.py`: **Deleted** — legacy entrypoint superseded by `push-back` CLI.

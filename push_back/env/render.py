@@ -9,7 +9,9 @@ Draws a top-down view of the 144×144" VEX field:
 from __future__ import annotations
 
 import math
+import time
 from collections import defaultdict
+from functools import lru_cache
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -21,12 +23,11 @@ from push_back.env.state import (
     GRID_SIZE,
     HEADING_DELTAS,
     ROBOT_RADIUS,
-    Goal,
     WorldState,
 )
 
 # pixels per inch — controls output resolution
-PPI = 5
+PPI = 3
 IMG_SIZE = FIELD_INCHES * PPI  # 720 px
 
 # colors
@@ -47,96 +48,200 @@ GOAL_TUBE_WIDTH = 3  # line width for goal tube outline
 LABEL_COLOR = (200, 200, 200)
 AXIS_COLOR = (140, 140, 140)
 AXIS_LEN = 30 * PPI  # length of axis arrows in pixels
-IMG_MARGIN = 25 * PPI  # extra pixels around the field for labels
+# per-side margins (pixels) — only as wide as the content on that edge
+MARGIN_LEFT = 24 * PPI  # room for HUD sidebar
+MARGIN_TOP = 8 * PPI
+MARGIN_RIGHT = 20 * PPI  # room for origin (0,0) label
+MARGIN_BOTTOM = 8 * PPI
 GRID_COLOR = (100, 100, 100)
 COLLISION_SEG_COLOR = (200, 200, 50)
 
+# cached fonts — scaled to PPI (sizes tuned at PPI=5, scale linearly)
+_FONT_SM: ImageFont.FreeTypeFont = ImageFont.load_default(
+    size=max(8, int(12 * PPI / 5))
+)
+_FONT_MD: ImageFont.FreeTypeFont = ImageFont.load_default(
+    size=max(10, int(20 * PPI / 5))
+)
+_FONT_LG: ImageFont.FreeTypeFont = ImageFont.load_default(
+    size=max(12, int(34 * PPI / 5))
+)
+
 
 def _to_px(gx: int, gy: int) -> tuple[int, int]:
-    """Grid cell → pixel coords (y-flip so +y is up), offset by IMG_MARGIN."""
+    """Grid cell → pixel coords (y-flip so +y is up), offset by margins."""
     return (
-        IMG_MARGIN + int((FIELD_INCHES - gy * CELL_SIZE) * PPI),
-        IMG_MARGIN + int((FIELD_INCHES - gx * CELL_SIZE) * PPI),
+        MARGIN_LEFT + int((FIELD_INCHES - gy * CELL_SIZE) * PPI),
+        MARGIN_TOP + int((FIELD_INCHES - gx * CELL_SIZE) * PPI),
     )
 
 
 def _inches_to_px(x_in: float, y_in: float) -> tuple[float, float]:
-    """Inch coordinates → pixel coords (y-flip so +y is up), offset by IMG_MARGIN."""
+    """Inch coordinates → pixel coords (y-flip so +y is up), offset by margins."""
     return (
-        IMG_MARGIN + (FIELD_INCHES - y_in) * PPI,
-        IMG_MARGIN + (FIELD_INCHES - x_in) * PPI,
+        MARGIN_LEFT + (FIELD_INCHES - y_in) * PPI,
+        MARGIN_TOP + (FIELD_INCHES - x_in) * PPI,
     )
 
 
-def _draw_goal(draw: ImageDraw.ImageDraw, goal: Goal, ppi: int) -> None:
-    """Draw a goal tube between its two interface points with ball slots."""
-    ax, ay = _inches_to_px(*goal.interface_a_inches)
-    bx, by = _inches_to_px(*goal.interface_b_inches)
-
-    # tube outline
-    draw.line([(ax, ay), (bx, by)], fill=(180, 180, 180), width=GOAL_TUBE_WIDTH)
-
-    # evenly space slots along the tube
-    n = goal.capacity
-    slot_r = int(BALL_DIA / 2 * ppi)
-    for i, slot in enumerate(goal.slots):
-        t = (i + 0.5) / n if n > 0 else 0.5
-        cx = int(ax + t * (bx - ax))
-        cy = int(ay + t * (by - ay))
-        if slot is not None:
-            fill = BALL_COLORS.get(int(slot), (0, 200, 50))
-            draw.ellipse(
-                [cx - slot_r, cy - slot_r, cx + slot_r, cy + slot_r],
-                fill=fill,
-                outline=(255, 255, 255),
-            )
-        else:
-            draw.ellipse(
-                [cx - slot_r, cy - slot_r, cx + slot_r, cy + slot_r],
-                fill=None,
-                outline=(120, 120, 120),
-            )
-
-
-def _draw_agent(
-    draw: ImageDraw.ImageDraw,
-    gx: int,
-    gy: int,
+@lru_cache(maxsize=4)
+def _make_agent_sprite(
     heading: int,
     color: tuple[int, int, int],
-    held_balls: list[int],
-) -> None:
-    """Draw a robot as a filled circle with heading line and held-ball counts."""
-    cx, cy = _to_px(gx, gy)
-    r = AGENT_RADIUS
+    red_n: int,
+    blue_n: int,
+) -> Image.Image:
+    """Return an RGBA sprite for a robot, cached by visual state."""
+    r = int(AGENT_RADIUS)
+    pad = 4  # extra pixels for stroke overflow
+    size = 2 * r + 2 * pad
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    cx, cy = r + pad, r + pad
     draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=color, outline="white", width=2)
 
-    # heading line — pixel axes are swapped & flipped vs grid axes:
-    #   pixel_x ← -(grid_y),  pixel_y ← -(grid_x)
     dx, dy = HEADING_DELTAS[heading]
     length = math.hypot(dx, dy) or 1.0
     lx = cx + int(r * (-dy) / length)
     ly = cy + int(r * (-dx) / length)
     draw.line([(cx, cy), (lx, ly)], fill="white", width=3)
 
-    # held ball counts
-    red_n = sum(1 for b in held_balls if b == BallColor.RED)
-    blue_n = sum(1 for b in held_balls if b == BallColor.BLUE)
-    font = ImageFont.load_default()
-    if red_n > 0:
-        draw.text(
-            (cx - r + 2, cy + int(r * 0.3)),
-            str(red_n),
-            fill=BALL_COLORS[BallColor.RED],
-            font=font,
+    red_str = str(red_n)
+    blue_str = str(blue_n)
+    spacing = 4
+    rw = _FONT_LG.getlength(red_str)
+    bw = _FONT_LG.getlength(blue_str)
+    ascent, descent = _FONT_LG.getmetrics()
+    text_h = ascent + descent
+    total_w = rw + spacing + bw
+    rx = cx - total_w / 2
+    ty = cy - text_h / 2
+    bx_pos = rx + rw + spacing
+    draw.text(
+        (rx, ty),
+        red_str,
+        fill=BALL_COLORS[BallColor.RED],
+        font=_FONT_LG,
+        stroke_width=2,
+        stroke_fill="black",
+    )
+    draw.text(
+        (bx_pos, ty),
+        blue_str,
+        fill=BALL_COLORS[BallColor.BLUE],
+        font=_FONT_LG,
+        stroke_width=2,
+        stroke_fill="black",
+    )
+    return img
+
+
+@lru_cache(maxsize=2)
+def _render_background(
+    blocked_cells: frozenset[tuple[int, int]],
+    collision_segments: tuple[tuple[float, float, float, float], ...],
+    goal_geometry: tuple[tuple[tuple[float, float], tuple[float, float], int], ...],
+    ppi: int = PPI,
+    *,
+    draw_grid: bool = False,
+) -> Image.Image:
+    """Render static field elements that are identical every frame."""
+    field_size = FIELD_INCHES * ppi
+    img_w = field_size + MARGIN_LEFT + MARGIN_RIGHT
+    img_h = field_size + MARGIN_TOP + MARGIN_BOTTOM
+    # ffmpeg needs even dimensions
+    img_w += img_w % 2
+    img_h += img_h % 2
+    img = Image.new("RGB", (img_w, img_h), FIELD_COLOR)
+    draw = ImageDraw.Draw(img)
+
+    if draw_grid:
+        for g in range(GRID_SIZE + 1):
+            _, row_px = _to_px(g, 0)
+            col_px, _ = _to_px(0, g)
+            draw.line(
+                [(MARGIN_LEFT, row_px), (MARGIN_LEFT + field_size, row_px)],
+                fill=GRID_COLOR,
+            )
+            draw.line(
+                [(col_px, MARGIN_TOP), (col_px, MARGIN_TOP + field_size)],
+                fill=GRID_COLOR,
+            )
+
+    bdr = 2 * ppi
+    draw.rectangle(
+        [
+            MARGIN_LEFT + bdr,
+            MARGIN_TOP + bdr,
+            MARGIN_LEFT + field_size - bdr,
+            MARGIN_TOP + field_size - bdr,
+        ],
+        outline=BORDER_COLOR,
+        width=3,
+    )
+
+    half = CELL_SIZE * ppi // 2
+    for gx, gy in blocked_cells:
+        cx, cy = _to_px(gx, gy)
+        draw.rectangle(
+            [cx - half, cy - half, cx + half, cy + half],
+            fill=GRID_COLOR,
         )
-    if blue_n > 0:
-        draw.text(
-            (cx + int(r * 0.3), cy + int(r * 0.3)),
-            str(blue_n),
-            fill=BALL_COLORS[BallColor.BLUE],
-            font=font,
-        )
+
+    for ax, ay, bx, by in collision_segments:
+        p1 = _inches_to_px(ax, ay)
+        p2 = _inches_to_px(bx, by)
+        draw.line([p1, p2], fill=COLLISION_SEG_COLOR, width=2)
+
+    for intf_a, intf_b, capacity in goal_geometry:
+        px_a = _inches_to_px(*intf_a)
+        px_b = _inches_to_px(*intf_b)
+        draw.line([px_a, px_b], fill=(180, 180, 180), width=GOAL_TUBE_WIDTH)
+        slot_r = int(BALL_DIA / 2 * ppi)
+        for i in range(capacity):
+            t = (i + 0.5) / capacity if capacity > 0 else 0.5
+            cx = int(px_a[0] + t * (px_b[0] - px_a[0]))
+            cy = int(px_a[1] + t * (px_b[1] - px_a[1]))
+            draw.ellipse(
+                [cx - slot_r, cy - slot_r, cx + slot_r, cy + slot_r],
+                fill=None,
+                outline=(120, 120, 120),
+            )
+
+    ox, oy = _to_px(0, 0)
+    draw.ellipse([ox - 8, oy - 8, ox + 8, oy + 8], fill=LABEL_COLOR)
+    draw.text((ox + 8, oy - 8), "(0,0)", fill=LABEL_COLOR, font=_FONT_MD)
+    ex, ey = _to_px(FIELD_INCHES // CELL_SIZE, 0)
+    draw.text((ex, ey - 25), "+x 180°", fill=LABEL_COLOR, font=_FONT_MD)
+    yx, yy = _to_px(0, FIELD_INCHES // CELL_SIZE + 1)
+    draw.text((yx, yy - 25), "+y 90°", fill=LABEL_COLOR, font=_FONT_MD)
+
+    return img
+
+
+# Per-phase timing accumulators (seconds).
+_timings: dict[str, float] = {
+    "bg_hash": 0.0,
+    "bg_copy": 0.0,
+    "balls": 0.0,
+    "agents": 0.0,
+    "hud_step": 0.0,
+    "hud_robot": 0.0,
+    "hud_ball": 0.0,
+    "tobytes": 0.0,
+}
+_frame_count: int = 0
+
+
+def get_render_timings() -> dict[str, float]:
+    """Return accumulated render phase timings and reset them."""
+    global _frame_count
+    result = {k: v for k, v in _timings.items()}
+    result["frames"] = float(_frame_count)
+    for k in _timings:
+        _timings[k] = 0.0
+    _frame_count = 0
+    return result
 
 
 def render_state(
@@ -147,70 +252,27 @@ def render_state(
     step: int | None = None,
 ) -> Image.Image:
     """Return a PIL Image of the current field state."""
-    field_size = FIELD_INCHES * ppi
-    total = field_size + 2 * IMG_MARGIN
-    # h264 yuv420p needs even dimensions
-    if total % 2:
-        total += 1
-    img = Image.new("RGB", (total, total), FIELD_COLOR)
-    draw = ImageDraw.Draw(img)
+    global _frame_count
+    _frame_count += 1
 
-    # grid lines
-    if draw_grid:
-        for g in range(GRID_SIZE + 1):
-            # _to_px returns (col_px, row_px); vary gx for horizontal, gy for vertical
-            _, row_px = _to_px(g, 0)
-            col_px, _ = _to_px(0, g)
-            draw.line(
-                [(IMG_MARGIN, row_px), (IMG_MARGIN + field_size, row_px)],
-                fill=GRID_COLOR,
-            )
-            draw.line(
-                [(col_px, IMG_MARGIN), (col_px, IMG_MARGIN + field_size)],
-                fill=GRID_COLOR,
-            )
-
-    # field border
-    bdr = 2 * ppi
-    draw.rectangle(
-        [
-            IMG_MARGIN + bdr,
-            IMG_MARGIN + bdr,
-            IMG_MARGIN + field_size - bdr,
-            IMG_MARGIN + field_size - bdr,
-        ],
-        outline=BORDER_COLOR,
-        width=3,
+    t = time.perf_counter()
+    blocked = frozenset(state.blocked_cells)
+    segments = tuple(
+        (seg.ax, seg.ay, seg.bx, seg.by) for seg in state.collision_segments
     )
+    goals = tuple(
+        (g.interface_a_inches, g.interface_b_inches, g.capacity) for g in state.goals
+    )
+    _timings["bg_hash"] += time.perf_counter() - t
 
-    # origin marker and axes
-    ox, oy = _to_px(0, 0)  # pixel position of grid (0,0)
-    font = ImageFont.load_default()
-    try:
-        label_font = ImageFont.load_default(size=20)
-    except TypeError:
-        label_font = font
-
-    # blocked cells
-    half = CELL_SIZE * ppi // 2
-    for gx, gy in state.blocked_cells:
-        cx, cy = _to_px(gx, gy)
-        draw.rectangle(
-            [cx - half, cy - half, cx + half, cy + half],
-            fill=GRID_COLOR,
-        )
-
-    # collision segments (walls + goal boundaries)
-    for seg in state.collision_segments:
-        p1 = _inches_to_px(seg.ax, seg.ay)
-        p2 = _inches_to_px(seg.bx, seg.by)
-        draw.line([p1, p2], fill=COLLISION_SEG_COLOR, width=2)
-
-    # goal ball slots
-    for goal in state.goals:
-        _draw_goal(draw, goal, ppi)
+    t = time.perf_counter()
+    bg = _render_background(blocked, segments, goals, ppi, draw_grid=draw_grid)
+    img = bg.copy()
+    draw = ImageDraw.Draw(img)
+    _timings["bg_copy"] += time.perf_counter() - t
 
     # balls — aggregate by cell
+    t = time.perf_counter()
     ball_r = int(BALL_DIA / 2 * ppi)
     cell_balls: dict[tuple[int, int], dict[int, int]] = defaultdict(
         lambda: defaultdict(int)
@@ -218,8 +280,6 @@ def render_state(
     for row in state.balls_on_field:
         bx, by, color = int(row[0]), int(row[1]), int(row[2])
         cell_balls[(bx, by)][color] += 1
-
-    font = ImageFont.load_default()
     for (bx, by), colors in cell_balls.items():
         px, py = _to_px(bx, by)
         red_n = colors.get(int(BallColor.RED), 0)
@@ -245,8 +305,8 @@ def render_state(
                 90,
                 fill=BALL_COLORS[BallColor.BLUE],
             )
-            draw.text((px - ball_r, py - 5), str(red_n), fill="white", font=font)
-            draw.text((px + 2, py - 5), str(blue_n), fill="white", font=font)
+            draw.text((px - ball_r, py - 5), str(red_n), fill="white", font=_FONT_SM)
+            draw.text((px + 2, py - 5), str(blue_n), fill="white", font=_FONT_SM)
         else:
             # Single color, multiple balls
             c = BallColor.RED if red_n else BallColor.BLUE
@@ -254,68 +314,58 @@ def render_state(
                 [px - ball_r, py - ball_r, px + ball_r, py + ball_r],
                 fill=BALL_COLORS[c],
             )
-            draw.text((px - 4, py - 5), str(total), fill="white", font=font)
+            draw.text((px - 4, py - 5), str(total), fill="white", font=_FONT_SM)
+    _timings["balls"] += time.perf_counter() - t
 
-    # agents
+    # agents — paste cached sprites
+    t = time.perf_counter()
+    r = int(AGENT_RADIUS)
+    pad = 4
     for i, pose in enumerate(state.agents):
         color = AGENT_COLORS[i] if i < len(AGENT_COLORS) else (200, 200, 200)
-        held = [int(b) for b in state.robot_held_balls[i]]
-        _draw_agent(draw, pose.x, pose.y, pose.heading, color, held)
+        held = state.robot_held_balls[i]
+        red_n = sum(1 for b in held if b == BallColor.RED)
+        blue_n = sum(1 for b in held if b == BallColor.BLUE)
+        sprite = _make_agent_sprite(pose.heading, color, red_n, blue_n)
+        cx, cy = _to_px(pose.x, pose.y)
+        img.paste(sprite, (cx - r - pad, cy - r - pad), sprite)
+    _timings["agents"] += time.perf_counter() - t
 
-    # origin dot + label (drawn last so they're on top)
-    draw.ellipse([ox - 8, oy - 8, ox + 8, oy + 8], fill=LABEL_COLOR)
-    draw.text((ox + 8, oy - 8), "(0,0)", fill=LABEL_COLOR, font=label_font)
-    # +x axis label at far end
-    ex, ey = _to_px(FIELD_INCHES // CELL_SIZE, 0)
-    draw.text((ex, ey - 25), "+x 180°", fill=LABEL_COLOR, font=label_font)
-    # +y axis label at far end
-    yx, yy = _to_px(0, FIELD_INCHES // CELL_SIZE + 1)
-    draw.text((yx, yy - 25), "+y 90°", fill=LABEL_COLOR, font=label_font)
-
-    # step number (top-left corner)
-    if step is not None:
-        bbox = label_font.getbbox(f"Step {step}")
-        draw.rectangle(
-            [8, 8, 12 + bbox[2], 12 + bbox[3]],
-            fill=(0, 0, 0),
-        )
-        draw.text((10, 10), f"Step {step}", fill=LABEL_COLOR, font=label_font)
-
-    # robot locations (below step number)
-    y_start = 35 if step is not None else 10
-    line_height = 22
-    # background for all robot labels
-    max_label = max(
-        (
-            label_font.getbbox(f"R{i}: ({p.x}, {p.y})")[2]
-            for i, p in enumerate(state.agents)
-        ),
-        default=0,
+    # HUD panels — cached RGBA overlays
+    from push_back.env.render_hud import (
+        render_ball_panel,
+        render_robot_panel,
+        render_step_panel,
     )
-    bg_bottom = y_start + len(state.agents) * line_height + 2
-    draw.rectangle([8, y_start - 2, 12 + max_label, bg_bottom], fill=(0, 0, 0))
-    for i, pose in enumerate(state.agents):
-        color = AGENT_COLORS[i] if i < len(AGENT_COLORS) else (200, 200, 200)
-        label = f"R{i}: ({pose.x}, {pose.y})"
-        draw.text((10, y_start + i * line_height), label, fill=color, font=label_font)
 
-    # ball locations (below robots, separated by a blank line)
-    ball_y = bg_bottom + line_height
-    # sort: red balls first then blue, each group by original index
-    indexed_balls = [
-        (i, int(row[0]), int(row[1]), int(row[2]))
-        for i, row in enumerate(state.balls_on_field)
-    ]
-    indexed_balls.sort(key=lambda b: (b[3], b[0]))
-    ball_labels: list[tuple[str, tuple[int, int, int]]] = []
-    for idx, bx, by, bc in indexed_balls:
-        c = BALL_COLORS.get(bc, (200, 200, 200))
-        ball_labels.append((f"B{idx}: ({bx}, {by})", c))
-    if ball_labels:
-        max_ball_w = max(label_font.getbbox(lbl)[2] for lbl, _ in ball_labels)
-        ball_bg_bottom = ball_y + len(ball_labels) * line_height + 2
-        draw.rectangle([8, ball_y - 2, 12 + max_ball_w, ball_bg_bottom], fill=(0, 0, 0))
-        for j, (lbl, c) in enumerate(ball_labels):
-            draw.text((10, ball_y + j * line_height), lbl, fill=c, font=label_font)
+    y_cursor = 4
+    t = time.perf_counter()
+    if step is not None:
+        step_img = render_step_panel(step)
+        img.paste(step_img, (2, y_cursor), step_img)
+        y_cursor += step_img.height + 2
+    _timings["hud_step"] += time.perf_counter() - t
+
+    t = time.perf_counter()
+    positions = tuple((p.x, p.y) for p in state.agents)
+    robot_img = render_robot_panel(positions)
+    img.paste(robot_img, (2, y_cursor), robot_img)
+    y_cursor += robot_img.height + 4
+    _timings["hud_robot"] += time.perf_counter() - t
+
+    t = time.perf_counter()
+    indexed_balls = tuple(
+        sorted(
+            (
+                (i, int(row[0]), int(row[1]), int(row[2]))
+                for i, row in enumerate(state.balls_on_field)
+            ),
+            key=lambda b: (b[3], b[0]),
+        )
+    )
+    y_cursor += 20
+    ball_img = render_ball_panel(indexed_balls)
+    img.paste(ball_img, (2, y_cursor), ball_img)
+    _timings["hud_ball"] += time.perf_counter() - t
 
     return img

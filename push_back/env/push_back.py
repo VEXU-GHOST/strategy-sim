@@ -11,6 +11,7 @@ import functools
 
 import gymnasium
 import numpy as np
+from PIL import Image
 from pettingzoo import ParallelEnv
 
 from push_back.env.robots.base import BaseRobot
@@ -200,13 +201,13 @@ class PushBackEnv(ParallelEnv):
 
         return observations, rewards, terminations, truncations, infos
 
-    def render(self, *, draw_grid: bool = False) -> np.ndarray | None:
-        """Render current state. Returns HWC uint8 array or None."""
+    def render(self, *, draw_grid: bool = False) -> Image.Image | None:
+        """Render current state. Returns a PIL Image or None."""
         img = render_state(self.state, draw_grid=draw_grid, step=self.state.timestep)
         if self.render_mode == "human":
             img.show()
             return None
-        return np.array(img)
+        return img
 
     # ---- internals ----
 
