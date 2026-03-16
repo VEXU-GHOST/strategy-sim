@@ -119,7 +119,8 @@ def run(
         f"hud_step={rt['hud_step']/n*1000:.1f} "
         f"hud_robot={rt['hud_robot']/n*1000:.1f} "
         f"hud_ball={rt['hud_ball']/n*1000:.1f} "
-        f"tobytes={rt['tobytes']/n*1000:.1f}"
+        f"tobytes={rt['tobytes']/n*1000:.1f} "
+        f"qput={rt.get('qput',0.0)/n*1000:.1f}"
     )
     typer.echo(f"saved {frame_count} frames → {out}")
 
@@ -193,8 +194,12 @@ class _Encoder:
 
         _t = time.perf_counter()
         raw = bytes(memoryview(np.asarray(frame)))
-        _timings["tobytes"] += time.perf_counter() - _t
+        tobytes_dt = time.perf_counter() - _t
+        _timings["tobytes"] += tobytes_dt
+
+        _t2 = time.perf_counter()
         self._q.put(raw)
+        _timings["qput"] = _timings.get("qput", 0.0) + (time.perf_counter() - _t2)
 
     def finish(self) -> None:
         """Signal writer thread to stop, wait for ffmpeg to finish."""

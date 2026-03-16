@@ -52,6 +52,9 @@ scripts/
 # play the output
 mpv --loop outputs/demo.mp4 --pause
 
+# 2x zoom (video is 1128×960 native)
+mpv --loop outputs/demo.mp4 --pause --window-scale=2
+
 # start at a specific time (e.g. 5s = step 50 at 10 fps)
 mpv --loop outputs/demo.mp4 --pause --start=5
 ```
