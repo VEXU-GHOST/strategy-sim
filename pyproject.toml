@@ -9,10 +9,11 @@ dependencies = [
     "pillow",
     "tqdm",
     "typer",
+    "python-mpv",
+    "pettingzoo",
 ]
 
 [project.optional-dependencies]
-zoo = ["pettingzoo"]
 
 [project.scripts]
 ghost-strategy = "ghost_strategy.cli:app"

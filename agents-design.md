@@ -501,3 +501,193 @@ vf = av.VideoFrame.from_numpy_buffer(npy, format="rgb24")
 
 ### Files changed
 - `cli.py`: Encoder switched from `libx264`/`yuv420p`/`veryfast` to `libx264rgb`/`rgb24`/`ultrafast`.
+
+---
+
+## Multi-threaded render pipeline on Python 3.14t (Copilot, multi-session)
+
+**Agent**: GitHub Copilot (Claude Opus 4.6)
+
+### Motivation
+Single-threaded rendering hit the GIL wall at ~0.54s/1050 steps. Moved to Python 3.14.3 free-threaded (deadsnakes PPA `python3.14-nogil`, `sys._is_gil_enabled()` → False) to enable true parallel rendering.
+
+### Architecture
+
+```
+Main thread:     sim step → state.snapshot() → render_q
+4 render workers: render_state() → np.asarray → av.VideoFrame(rgb24) → reformat(yuv420p) → enc.feed()
+Encoder thread:  reorder buffer → stream.encode(vf) → container.mux(packet)
+```
+
+**Key design choices**:
+
+1. **`WorldState.snapshot()`** — deep-copies mutable per-frame data (balls, poses, held_balls), shares static geometry references. Makes snapshots safe to read from any thread.
+
+2. **`@lru_cache` returns `np.ndarray`** — PIL Image objects are NOT thread-safe for concurrent reads. All cached render functions (`_render_background`, `_make_agent_sprite`, HUD panels) return numpy arrays. Each thread creates its own `PIL.Image.fromarray()` when it needs to draw.
+
+3. **Per-thread fonts via `threading.local()`** — FreeType font objects corrupt under concurrent access (segfaults, "invalid outline" errors). Each thread creates its own font instances via `_get_fonts()` in render.py and `_get_font_md()` in render_hud.py. Eliminates lock contention vs the earlier `_font_lock` approach.
+
+4. **YUV420p conversion in render workers** — Render workers produce `av.VideoFrame` in yuv420p format. Encoder thread only does `stream.encode()` + `container.mux()` (inherently sequential x264 state + container IO).
+
+5. **Reorder buffer in encoder** — Workers finish frames out of order. Encoder maintains `dict[int, VideoFrame]` keyed by step number, emitting consecutive frames to x264 in strict order.
+
+6. **Encoder reverted to `libx264`/`veryfast`/`yuv420p`** — libx264rgb was optimal for single-threaded (skip colorspace conversion), but with multi-threaded workers doing the conversion in parallel, the standard yuv420p pipeline is preferred.
+
+### Thread-safety bugs encountered & fixed
+| Symptom | Root cause | Fix |
+|---|---|---|
+| Segfault with 4 workers | PIL Image concurrent reads | Cache numpy arrays, `Image.fromarray()` per thread |
+| "invalid outline" / "unsupported glyph" | FreeType not thread-safe | `threading.local()` per-thread font objects |
+
+### Performance (1000 steps, Python 3.14.3 free-threaded, Ryzen 5 7640U)
+
+```
+Total: 2.18s (2.18 ms/frame)
+Encoder (bottleneck): encode=2.11ms mux=0.013ms → 2.17ms/frame
+Render workers (4T, ms/frame):
+  bg_copy=0.39 agents=0.32 hud_step=0.29 asarray=0.40 from_buf=0.98 yuv=3.55
+  (parallelized → effective throughput ~1.6ms/frame)
+Sim: 0.17s | Snap: 0.01s | Drain: 0.02s
+```
+
+### Files changed
+- `push_back/env/state.py`: Added `WorldState.snapshot()` method
+- `push_back/env/render.py`: `threading.local()` fonts, `@lru_cache` returns ndarray, `render_state()` accepts `timings` dict
+- `push_back/env/render_hud.py`: Own `threading.local()` font, all render functions return ndarray
+- `push_back/cli.py`: 4-worker render pipeline, reorder-buffer encoder, yuv420p conversion in workers
+
+---
+
+## x264 FRAME threading + timing fix (Copilot)
+
+**Agent**: GitHub Copilot (Claude Opus 4.6)
+
+### Changes
+1. **Fixed timing to add up** — added `qput` (render_q.put backpressure) and `join` (worker join wait) to output. Previously ~90% of wall time was unaccounted.
+2. **x264 FRAME threading** — `stream.thread_count=2`, `stream.thread_type=FRAME`. x264 spawns 2 internal threads for frame-level parallelism.
+
+### Benchmark grid (6-core Ryzen 5 7640U, 1000 steps, best of 2)
+
+| Config | total ms/f | encode ms | file size |
+|---|---|---|---|
+| R4 x264=1 (old) | 1.52 | 1.48 | 297KB |
+| **R4 x264=2F** | **1.35** | 0.60 | 297KB |
+| R4 x264=3F | 1.36 | 0.38 | 297KB |
+| R4 x264=6F | 1.50 | 0.41 | 310KB |
+| R3 x264=1 | 1.56 | 1.51 | 297KB |
+| R2 x264=1 | 1.87 | 1.41 | 297KB |
+| R1 x264=1 | 2.79 | 1.28 | 297KB |
+
+R4+x264=2F wins: 8 total threads on 6 cores is the sweet spot. More x264 threads steal CPU from render workers (qget_wait rises). Fewer render workers always hurts — render throughput is the bigger lever.
+
+### Files changed
+- `push_back/cli.py`: Added qput/join timing, set `thread_count=2` + `ThreadType.FRAME`
+
+---
+
+## Chunked parallel encoding experiment (Copilot) — REJECTED
+
+**Agent**: GitHub Copilot (Claude Opus 4.6)
+
+### Motivation
+The old pipeline (4 render workers → queue → 1 encoder thread) is bottlenecked by the single encoder thread. User proposed: "could each thread render a sequence of frames and encode them independently?"
+
+### Architecture
+**Phase 1 — Simulate all steps upfront**: Run the entire simulation first, store `WorldState.snapshot()` after each step into `list[WorldState]`. Very fast (~0.05s for 1050 steps).
+
+**Phase 2 — Chunked parallel render + encode**: Split snapshots into N contiguous chunks. Each worker thread independently:
+1. Opens its own `av.open()` container writing to a temp `.mp4`
+2. Creates its own `libx264` stream (veryfast, yuv420p)
+3. Iterates through its chunk: `render_state()` → `np.asarray()` → `from_numpy_buffer(rgb24)` → `reformat(yuv420p)` → `stream.encode()` → `container.mux()`
+4. Flushes and closes
+
+No queues, no reorder buffer, no shared encoder. Thread-safety via `threading.local()` fonts + `@lru_cache` returning ndarray.
+
+**Phase 3 — ffmpeg concat**: `ffmpeg -f concat -safe 0 -i concat.txt -c copy output.mp4` (stream copy, no re-encode, ~60ms). Temp files cleaned with `shutil.rmtree`.
+
+### Benchmark (1050 steps, 6-core Ryzen 5 7640U, best of 2–3 runs)
+
+| Config | ms/frame | File size |
+|---|---|---|
+| W=2 | 2.42 | 469 KB |
+| W=3 | 2.02 | 466 KB |
+| W=4 | 1.85 | 508 KB |
+| W=5 | 1.82 | 439 KB |
+| W=6 | 1.75 | 458 KB |
+| **W=8** | **1.60** | 498 KB |
+| W=10 | 1.67 | 537 KB |
+| W=12 | 1.81 | 575 KB |
+| W=16 | 1.87 | 653 KB |
+
+Adding x264 internal FRAME threading per worker (tc=2F, tc=3F) made things worse due to total thread contention on 6 cores.
+
+### Why it lost to the old pipeline
+Best chunked: **1.60 ms/frame** (W=8) vs old pipeline: **1.35 ms/frame** (R4+x264=2F).
+
+The critical difference is **pipelining**. In the old architecture, while the encoder thread encodes frame N, render workers are already rendering frames N+1..N+4 — render and encode overlap in time. In chunked, each worker does render→encode **serially**: it can't start rendering frame N+1 until it finishes encoding frame N. Wall time = render_time + encode_time, vs old pipeline ≈ max(render_time, encode_time).
+
+More workers (W=8+) partially compensate by giving each worker fewer frames, but on 6 cores the oversubscription causes contention. The chunked approach would likely only win on machines with many more cores (16+).
+
+### Decision
+**Rejected** — reverted to old pipeline (R4 render workers + 1 encoder thread, x264 `thread_count=2` FRAME). Simpler code isn't worth 18% slower.
+
+## PerfAccum timing refactor (Copilot)
+
+**Agent**: GitHub Copilot (Claude Opus 4.6)
+
+Replaced all manual `t = time.perf_counter(); ...; dt += time.perf_counter() - t` timing with `PerfAccum` context-manager utility.
+
+- Created `push_back/env/perf.py` — `PerfAccum` class with `section()` context manager, `add()`, `seconds()`, `total()`, `report_ms()`, `reset()`
+- `render.py`: `_timings` dict → `_perf = PerfAccum()`, all manual timing → `with tm.section("key"):`, collapsed hud render/paste pairs into single sections
+- `render_encoder.py`: `_enc_timings` dict → `PerfAccum`, eliminated `t0/t1/t2/t3/t4` juggling, `feed()` simplified to just `self._q.put(frame)` (removed cross-module `_timings` coupling)
+- `cli.py`: `sim_dt`/`render_dt`/`encode_dt`/`drain_dt` → `PerfAccum`, 30-line report → 3-line report using `report_ms()`
+
+## P-mode palette pipeline & VAAPI investigation (Copilot)
+
+**Agent**: GitHub Copilot (Claude Opus 4.6)
+
+### P-mode integration
+Benchmark showed P/yuv420p/ultrafast/pal8 won at 1.43ms/frame (20% faster than RGB leader). Integrated full P-mode palette rendering:
+
+- `render.py`: Background + balls render in P-mode with fixed 15-color palette. Added `_PALETTE_COLORS` tuple, `FLAT_PALETTE` (768 ints), `_P_*` palette index constants. Agents and HUD use cached numpy paste instead of PIL draw.
+- `render_encoder.py`: `Encoder._writer` ingests P-mode PIL images via pal8 `VideoFrame` with BGRA palette on `plane[1]`. Palette computed once and cached.
+- `cli.py`: Preview uses `libx264/yuv420p` instead of `libx264rgb/rgb24`.
+
+### P-mode cache regression & fix
+Initial integration lost all text/sprite LRU caches → massive regression (4.05ms render vs 0.60ms before).
+
+Rewrote `render_hud.py` with P-mode cache pyramid (all caches produce `(H,W) uint8` palette index arrays):
+- `_render_glyph(char, color_idx)` → renders char as L-mode mask, thresholds to palette index
+- `_render_text(text, color_idx)` → composes cached glyphs into numpy row
+- `render_step_panel()`, `render_robot_panel()`, `render_ball_panel()` → cached numpy panels with black bg
+- `make_agent_sprite(heading, color_idx, red_n, blue_n)` → returns `(sprite, bool_mask)` cached arrays
+
+**Result**: 0.85ms/frame total (was ~5.7ms) — **4.8× speedup**. Render: 0.31ms (agents 0.14ms from 0.84ms, HUD ~0.04ms from ~3.0ms). Encoder: 0.84ms (x264 encode 0.67ms is now the bottleneck).
+
+### Timing accounting
+Found 0.05ms untracked in render (`Image.fromarray` + `putpalette` at end). Added `to_pil` section — all timings now account within 0.02ms.
+
+### Encode format benchmark
+Benchmarked all preview formats with real rendered frames:
+- x264/ultrafast/yuv420p: 0.320ms, **796KB** (optimal)
+- rawvideo/pal8: 0.186ms, 317MB (too large)
+- FFV1/pal8: ERROR (doesn't support pal8)
+- png/pal8, huffyuv, zlib, qtrle: various errors or much slower
+
+### VAAPI / hardware encode investigation
+- System: AMD Ryzen 7640U, RDNA3 GFX1103, VCN 4.0 — `vainfo` confirms H.264 encode via VA-API
+- System `ffmpeg` has `h264_vaapi`
+- **PyAV 17.0.0's bundled ffmpeg does NOT include `h264_vaapi`** — only h264_nvenc, h264_qsv, h264_amf, h264_v4l2m2m, h264, libopenh264
+- `h264_amf` listed but errors on Linux (requires Windows AMF runtime; AMD Linux = VAAPI)
+- `h264_v4l2m2m` errors (ARM SoC only)
+- `zscale` doesn't support pal8, and swscale pal8→yuv420p is only ~0.05ms anyway
+
+**Decision**: x264 ultrafast at ~0.32ms/frame accepted as the PyAV encode floor. VAAPI would require building PyAV from source against system ffmpeg or subprocess pipe — marginal gain for significant complexity at 576×480.
+
+### rawvideo vs x264 ultrafast (preview tmp file, 1200 steps)
+| Encoder | ms/frame (encode thread) | /tmp file size |
+|---|---|---|
+| rawvideo/pal8 (.nut) | ~0.55 | ~500 MB |
+| libx264/ultrafast/yuv420p | ~0.60–0.65 | ~1.2 MB |
+
+rawvideo saves ~0.1ms/frame on encode but produces a ~400× larger tmp file in RAM (/tmp is tmpfs). Not worth the RAM pressure for a marginal speed gain.

@@ -9,6 +9,9 @@ Usage:
 
 from __future__ import annotations
 
+from push_back.env.render_encoder import Encoder, FPS
+
+
 from pathlib import Path
 from typing import Optional
 
@@ -67,7 +70,8 @@ def run(
     from tqdm import trange
     import time
 
-    from push_back.env.render import get_render_timings, _timings
+    from push_back.env.perf import PerfAccum
+    from push_back.env.render import get_render_perf
 
     _obs, _infos = env.reset(seed=seed, options={"balls": initial_balls})
 
@@ -75,195 +79,70 @@ def run(
         out = out.with_suffix(".mp4")
 
     first_frame = env.render(draw_grid=grid)
-    enc = _Encoder(first_frame.size, out)
+
+    if play:
+        import atexit
+        import os
+        import tempfile
+
+        tmp_fd, _tmp_str = tempfile.mkstemp(suffix=".mp4", prefix="pb_preview_")
+        os.close(tmp_fd)
+        tmp_path = Path(_tmp_str)
+
+        def _cleanup() -> None:
+            if tmp_path.exists():
+                typer.echo(f"cleaning up {tmp_path}")
+                tmp_path.unlink()
+            else:
+                typer.echo(f"already cleaned up {tmp_path}")
+
+        atexit.register(_cleanup)
+        enc = Encoder(
+            first_frame.size,
+            tmp_path,
+            codec="libx264",
+            pix_fmt="yuv420p",
+            preset="ultrafast",
+        )
+    else:
+        enc = Encoder(first_frame.size, out)
+
     enc.feed(first_frame)
     frame_count = 1
 
+    perf = PerfAccum()
     t0 = time.perf_counter()
-    sim_dt: float = 0.0
-    render_dt: float = 0.0
-    encode_dt: float = 0.0
     for i in trange(steps, desc="simulating", miniters=steps // 20):
-        t_sim = time.perf_counter()
-        obs = BaseRobot.build_obs(env.state)
-        actions: dict[str, int] = {
-            name: robots[name].tick(obs, idx)
-            for idx, name in enumerate(env.possible_agents)
-        }
-        _obs, _rewards, _terms, _truncs, _infos = env.step(actions)
-        sim_dt += time.perf_counter() - t_sim
-        t_render = time.perf_counter()
-        frame = env.render(draw_grid=grid)
-        render_dt += time.perf_counter() - t_render
-        t_enc = time.perf_counter()
-        enc.feed(frame)
-        encode_dt += time.perf_counter() - t_enc
+        with perf.section("sim"):
+            obs = BaseRobot.build_obs(env.state)
+            actions: dict[str, int] = {
+                name: robots[name].tick(obs, idx)
+                for idx, name in enumerate(env.possible_agents)
+            }
+            _obs, _rewards, _terms, _truncs, _infos = env.step(actions)
+        with perf.section("render"):
+            frame = env.render(draw_grid=grid)
+        with perf.section("encoder_feed"):
+            enc.feed(frame)
         frame_count += 1
-    t_enc = time.perf_counter()
-    enc.finish()
+    with perf.section("drain"):
+        enc.finish()
     enc.report()
-    drain_dt = time.perf_counter() - t_enc
-    encode_dt += drain_dt
     total_dt = time.perf_counter() - t0
-    main_per_frame = (sim_dt + render_dt + encode_dt) / frame_count * 1000
+
     typer.echo(
-        f"sim: {sim_dt:.2f}s ({sim_dt / steps * 1000:.2f} ms/step) | "
-        f"render: {render_dt:.2f}s ({render_dt / steps * 1000:.2f} ms/frame) | "
-        f"encode: {encode_dt:.2f}s ({encode_dt / frame_count * 1000:.2f} ms/frame) | "
-        f"drain: {drain_dt:.2f}s | "
-        f"total: {total_dt:.2f}s ({main_per_frame:.2f} ms/frame)"
+        f"main (ms/frame): {perf.report_ms(frame_count)} "
+        f"| total: {total_dt:.2f}s ({total_dt / frame_count * 1000:.2f} ms/frame)"
     )
-    rt = get_render_timings()
-    n = rt["frames"] or 1
-    typer.echo(
-        f"  render breakdown (ms/frame): "
-        f"bg_hash={rt['bg_hash']/n*1000:.2f} "
-        f"bg_render={rt['bg_render']/n*1000:.2f} "
-        f"bg_copy={rt['bg_copy']/n*1000:.2f} "
-        f"balls={rt['balls']/n*1000:.2f} "
-        f"agents={rt['agents']/n*1000:.2f} "
-        f"hud_step_r={rt['hud_step_render']/n*1000:.2f} "
-        f"hud_step_p={rt['hud_step_paste']/n*1000:.2f} "
-        f"hud_robot_r={rt['hud_robot_render']/n*1000:.2f} "
-        f"hud_robot_p={rt['hud_robot_paste']/n*1000:.2f} "
-        f"hud_ball_r={rt['hud_ball_render']/n*1000:.2f} "
-        f"hud_ball_p={rt['hud_ball_paste']/n*1000:.2f}"
-    )
-    typer.echo(
-        f"  feed breakdown (ms/frame): "
-        f"tobytes={rt['tobytes']/n*1000:.2f} "
-        f"qput={rt.get('qput',0.0)/n*1000:.2f}"
-    )
-    typer.echo(f"saved {frame_count} frames → {out}")
+    rp = get_render_perf()
+    typer.echo(f"  render (ms/frame): {rp.report_ms(frame_count)}")
+    typer.echo(f"saved {frame_count} frames → {tmp_path if play else out}")
 
     if play:
-        import subprocess
+        from push_back.env.render_encoder import play_and_reencode
 
-        subprocess.run(["mpv", "--loop", str(out), "--pause", "--window-scale=2"])
-
-
-FPS = 10
-_QUEUE_DEPTH = 30  # buffer up to N frames before blocking the main thread
-
-
-class _Encoder:
-    """Threaded PyAV encoder — x264 runs in background thread, GIL released."""
-
-    def __init__(self, size: tuple[int, int], out: Path) -> None:
-        import queue
-        import threading
-
-        import av
-
-        out.parent.mkdir(parents=True, exist_ok=True)
-        w, h = size
-        self._container: av.container.OutputContainer = av.open(str(out), mode="w")
-        self._stream: av.video.stream.VideoStream = self._container.add_stream(
-            "libx264", rate=FPS
-        )
-        self._stream.width = w
-        self._stream.height = h
-        self._stream.pix_fmt = "yuv420p"
-        self._stream.options = {"preset": "veryfast"}
-
-        self._q: queue.Queue[Image.Image | None] = queue.Queue(maxsize=_QUEUE_DEPTH)
-        self._thread = threading.Thread(target=self._writer, daemon=True)
-        self._thread.start()
-
-    def _writer(self) -> None:
-        """Drain queue and encode via PyAV (GIL released during x264 work)."""
-        import av
-        import numpy as np
-        import time
-
-        stream = self._stream
-        container = self._container
-        # Per-phase accumulators (writer thread only — no lock needed)
-        self._enc_timings: dict[str, float] = {
-            "qget_wait": 0.0,
-            "asarray": 0.0,
-            "from_buf": 0.0,
-            "encode": 0.0,
-            "mux": 0.0,
-            "flush": 0.0,
-            "frames": 0,
-        }
-        et = self._enc_timings
-        while True:
-            t0 = time.perf_counter()
-            pil_img = self._q.get()
-            t1 = time.perf_counter()
-            et["qget_wait"] += t1 - t0
-            if pil_img is None:
-                break
-            npy = np.asarray(pil_img)  # zero-copy view into PIL buffer
-            t2 = time.perf_counter()
-            et["asarray"] += t2 - t1
-            vf = av.VideoFrame.from_numpy_buffer(npy, format="rgb24")
-            t3 = time.perf_counter()
-            et["from_buf"] += t3 - t2
-            for packet in stream.encode(vf):
-                t4 = time.perf_counter()
-                et["encode"] += t4 - t3
-                container.mux(packet)
-                t3 = time.perf_counter()
-                et["mux"] += t3 - t4
-            t4 = time.perf_counter()
-            et["encode"] += t4 - t3  # encode call that yields no packet
-            et["frames"] += 1
-        # Flush encoder
-        tf0 = time.perf_counter()
-        for packet in stream.encode():
-            container.mux(packet)
-        et["flush"] = time.perf_counter() - tf0
-
-    def feed(self, frame: Image.Image) -> None:
-        """Enqueue PIL frame for encoding (may block if queue full)."""
-        import time
-
-        from push_back.env.render import _timings
-
-        _t = time.perf_counter()
-        # No tobytes needed — PyAV reads from PIL image directly
-        _timings["tobytes"] += 0.0
-
-        _t2 = time.perf_counter()
-        self._q.put(frame)
-        _timings["qput"] = _timings.get("qput", 0.0) + (time.perf_counter() - _t2)
-
-    def finish(self) -> None:
-        """Signal writer thread to stop, flush and close container."""
-        self._q.put(None)
-        self._thread.join()
-        self._container.close()
-
-    def report(self) -> None:
-        """Print encoder thread timing breakdown."""
-        et = self._enc_timings
-        n = et["frames"] or 1
-        import typer
-
-        per_frame = (
-            (
-                et["qget_wait"]
-                + et["asarray"]
-                + et["from_buf"]
-                + et["encode"]
-                + et["mux"]
-            )
-            / n
-            * 1000
-        )
-        typer.echo(
-            f"  encoder thread (ms/frame): "
-            f"qget={et['qget_wait']/n*1000:.2f} "
-            f"asarray={et['asarray']/n*1000:.3f} "
-            f"from_buf={et['from_buf']/n*1000:.3f} "
-            f"encode={et['encode']/n*1000:.2f} "
-            f"mux={et['mux']/n*1000:.3f} "
-            f"| total={per_frame:.2f} "
-            f"flush={et['flush']*1000:.1f}ms(total)"
-        )
+        play_and_reencode(tmp_path, out)
+        tmp_path.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

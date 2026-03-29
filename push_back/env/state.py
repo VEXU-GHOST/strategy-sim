@@ -182,3 +182,20 @@ class WorldState:
     )
     score: tuple[int, int] = (0, 0)
     timestep: int = 0
+
+    def snapshot(self) -> "WorldState":
+        """Thread-safe shallow copy for off-thread rendering.
+
+        Copies mutable per-frame data (balls, poses, held balls).
+        Shares references to static geometry (goals, segments, blocked cells).
+        """
+        return WorldState(
+            balls_on_field=self.balls_on_field.copy(),
+            agents=[Pose(p.x, p.y, p.heading) for p in self.agents],
+            robot_held_balls=[list(h) for h in self.robot_held_balls],
+            blocked_cells=self.blocked_cells,
+            collision_segments=self.collision_segments,
+            goals=self.goals,
+            score=self.score,
+            timestep=self.timestep,
+        )

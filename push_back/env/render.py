@@ -8,10 +8,11 @@ Draws a top-down view of the 144×144" VEX field:
 
 from __future__ import annotations
 
-import math
-import time
+import threading
 from collections import defaultdict
 from functools import lru_cache
+
+import numpy as np
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -21,14 +22,12 @@ from push_back.env.state import (
     CELL_SIZE,
     FIELD_INCHES,
     GRID_SIZE,
-    HEADING_DELTAS,
     ROBOT_RADIUS,
     WorldState,
 )
 
 # pixels per inch — controls output resolution
 PPI = 3
-IMG_SIZE = FIELD_INCHES * PPI  # 720 px
 
 # colors
 FIELD_COLOR = (80, 80, 80)
@@ -46,8 +45,6 @@ AGENT_COLORS: list[tuple[int, int, int]] = [
 AGENT_RADIUS = ROBOT_RADIUS * CELL_SIZE * PPI  # robot radius in pixels
 GOAL_TUBE_WIDTH = 3  # line width for goal tube outline
 LABEL_COLOR = (200, 200, 200)
-AXIS_COLOR = (140, 140, 140)
-AXIS_LEN = 30 * PPI  # length of axis arrows in pixels
 # per-side margins (pixels) — only as wide as the content on that edge
 MARGIN_LEFT = 24 * PPI  # room for HUD sidebar
 MARGIN_TOP = 8 * PPI
@@ -56,16 +53,61 @@ MARGIN_BOTTOM = 8 * PPI
 GRID_COLOR = (100, 100, 100)
 COLLISION_SEG_COLOR = (200, 200, 50)
 
-# cached fonts — scaled to PPI (sizes tuned at PPI=5, scale linearly)
-_FONT_SM: ImageFont.FreeTypeFont = ImageFont.load_default(
-    size=max(8, int(12 * PPI / 5))
+# ── Fixed 256-color palette for P-mode rendering ──
+# All colors used in the renderer must have an entry here.
+_PALETTE_COLORS: tuple[tuple[int, int, int], ...] = (
+    (0, 0, 0),  # 0 — black
+    FIELD_COLOR,  # 1
+    BORDER_COLOR,  # 2
+    GRID_COLOR,  # 3
+    BALL_COLORS[BallColor.RED],  # 4
+    BALL_COLORS[BallColor.BLUE],  # 5
+    AGENT_COLORS[0],  # 6
+    AGENT_COLORS[1],  # 7
+    AGENT_COLORS[2],  # 8
+    AGENT_COLORS[3],  # 9
+    (255, 255, 255),  # 10 — white
+    LABEL_COLOR,  # 11
+    COLLISION_SEG_COLOR,  # 12
+    (180, 180, 180),  # 13 — goal tube line
+    (120, 120, 120),  # 14 — goal slot outline
 )
-_FONT_MD: ImageFont.FreeTypeFont = ImageFont.load_default(
-    size=max(10, int(20 * PPI / 5))
-)
-_FONT_LG: ImageFont.FreeTypeFont = ImageFont.load_default(
-    size=max(12, int(34 * PPI / 5))
-)
+_P_BLACK, _P_FIELD, _P_BORDER, _P_GRID = 0, 1, 2, 3
+_P_BALL_RED, _P_BALL_BLUE = 4, 5
+_P_AGENTS: tuple[int, ...] = (6, 7, 8, 9)
+_P_WHITE, _P_LABEL, _P_COLLISION = 10, 11, 12
+_P_GOAL, _P_GOAL_SLOT = 13, 14
+_P_BALL: dict[int, int] = {BallColor.RED: _P_BALL_RED, BallColor.BLUE: _P_BALL_BLUE}
+
+# Flat palette for PIL putpalette() — [r0,g0,b0, r1,g1,b1, ...]
+FLAT_PALETTE: list[int] = []
+for _c in _PALETTE_COLORS:
+    FLAT_PALETTE.extend(_c)
+FLAT_PALETTE.extend([0] * (768 - len(FLAT_PALETTE)))
+
+LINE_HEIGHT: int = max(14, int(22 * PPI / 5))
+
+# Font sizes — scaled to PPI (sizes tuned at PPI=5, scale linearly)
+_FONT_SM_SIZE: int = max(8, int(12 * PPI / 5))
+_FONT_MD_SIZE: int = max(10, int(20 * PPI / 5))
+_FONT_LG_SIZE: int = max(12, int(34 * PPI / 5))
+
+# FreeType font objects are NOT thread-safe.  Each thread gets its own set
+# via threading.local so render workers never contend.
+_tls = threading.local()
+
+
+def _get_fonts() -> (
+    tuple[ImageFont.FreeTypeFont, ImageFont.FreeTypeFont, ImageFont.FreeTypeFont]
+):
+    """Return (SM, MD, LG) font objects local to the calling thread."""
+    try:
+        return _tls.sm, _tls.md, _tls.lg  # type: ignore[return-value]
+    except AttributeError:
+        _tls.sm = ImageFont.load_default(size=_FONT_SM_SIZE)
+        _tls.md = ImageFont.load_default(size=_FONT_MD_SIZE)
+        _tls.lg = ImageFont.load_default(size=_FONT_LG_SIZE)
+        return _tls.sm, _tls.md, _tls.lg  # type: ignore[return-value]
 
 
 def _to_px(gx: int, gy: int) -> tuple[int, int]:
@@ -84,58 +126,6 @@ def _inches_to_px(x_in: float, y_in: float) -> tuple[float, float]:
     )
 
 
-@lru_cache(maxsize=4)
-def _make_agent_sprite(
-    heading: int,
-    color: tuple[int, int, int],
-    red_n: int,
-    blue_n: int,
-) -> Image.Image:
-    """Return an RGBA sprite for a robot, cached by visual state."""
-    r = int(AGENT_RADIUS)
-    pad = 4  # extra pixels for stroke overflow
-    size = 2 * r + 2 * pad
-    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    cx, cy = r + pad, r + pad
-    draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=color, outline="white", width=2)
-
-    dx, dy = HEADING_DELTAS[heading]
-    length = math.hypot(dx, dy) or 1.0
-    lx = cx + int(r * (-dy) / length)
-    ly = cy + int(r * (-dx) / length)
-    draw.line([(cx, cy), (lx, ly)], fill="white", width=3)
-
-    red_str = str(red_n)
-    blue_str = str(blue_n)
-    spacing = 4
-    rw = _FONT_LG.getlength(red_str)
-    bw = _FONT_LG.getlength(blue_str)
-    ascent, descent = _FONT_LG.getmetrics()
-    text_h = ascent + descent
-    total_w = rw + spacing + bw
-    rx = cx - total_w / 2
-    ty = cy - text_h / 2
-    bx_pos = rx + rw + spacing
-    draw.text(
-        (rx, ty),
-        red_str,
-        fill=BALL_COLORS[BallColor.RED],
-        font=_FONT_LG,
-        stroke_width=2,
-        stroke_fill="black",
-    )
-    draw.text(
-        (bx_pos, ty),
-        blue_str,
-        fill=BALL_COLORS[BallColor.BLUE],
-        font=_FONT_LG,
-        stroke_width=2,
-        stroke_fill="black",
-    )
-    return img
-
-
 @lru_cache(maxsize=2)
 def _render_background(
     blocked_cells: frozenset[tuple[int, int]],
@@ -144,16 +134,16 @@ def _render_background(
     ppi: int = PPI,
     *,
     draw_grid: bool = False,
-) -> Image.Image:
-    """Render static field elements that are identical every frame."""
+) -> np.ndarray:
+    """Render static field elements, cached as numpy array for thread safety."""
     field_size = FIELD_INCHES * ppi
     img_w = field_size + MARGIN_LEFT + MARGIN_RIGHT
     img_h = field_size + MARGIN_TOP + MARGIN_BOTTOM
-    # Round up to multiples of 32 so each RGB24 row is SIMD-aligned (AVX).
-    # This also satisfies ffmpeg's even-dimension requirement.
+    # Round up to multiples of 32 (even-dimension for ffmpeg).
     img_w = (img_w + 31) & ~31
     img_h = (img_h + 31) & ~31
-    img = Image.new("RGB", (img_w, img_h), FIELD_COLOR)
+    img = Image.new("P", (img_w, img_h), _P_FIELD)
+    img.putpalette(FLAT_PALETTE)
     draw = ImageDraw.Draw(img)
 
     if draw_grid:
@@ -162,11 +152,11 @@ def _render_background(
             col_px, _ = _to_px(0, g)
             draw.line(
                 [(MARGIN_LEFT, row_px), (MARGIN_LEFT + field_size, row_px)],
-                fill=GRID_COLOR,
+                fill=_P_GRID,
             )
             draw.line(
                 [(col_px, MARGIN_TOP), (col_px, MARGIN_TOP + field_size)],
-                fill=GRID_COLOR,
+                fill=_P_GRID,
             )
 
     bdr = 2 * ppi
@@ -177,7 +167,7 @@ def _render_background(
             MARGIN_LEFT + field_size - bdr,
             MARGIN_TOP + field_size - bdr,
         ],
-        outline=BORDER_COLOR,
+        outline=_P_BORDER,
         width=3,
     )
 
@@ -186,18 +176,18 @@ def _render_background(
         cx, cy = _to_px(gx, gy)
         draw.rectangle(
             [cx - half, cy - half, cx + half, cy + half],
-            fill=GRID_COLOR,
+            fill=_P_GRID,
         )
 
     for ax, ay, bx, by in collision_segments:
         p1 = _inches_to_px(ax, ay)
         p2 = _inches_to_px(bx, by)
-        draw.line([p1, p2], fill=COLLISION_SEG_COLOR, width=2)
+        draw.line([p1, p2], fill=_P_COLLISION, width=2)
 
     for intf_a, intf_b, capacity in goal_geometry:
         px_a = _inches_to_px(*intf_a)
         px_b = _inches_to_px(*intf_b)
-        draw.line([px_a, px_b], fill=(180, 180, 180), width=GOAL_TUBE_WIDTH)
+        draw.line([px_a, px_b], fill=_P_GOAL, width=GOAL_TUBE_WIDTH)
         slot_r = int(BALL_DIA / 2 * ppi)
         for i in range(capacity):
             t = (i + 0.5) / capacity if capacity > 0 else 0.5
@@ -206,47 +196,29 @@ def _render_background(
             draw.ellipse(
                 [cx - slot_r, cy - slot_r, cx + slot_r, cy + slot_r],
                 fill=None,
-                outline=(120, 120, 120),
+                outline=_P_GOAL_SLOT,
             )
 
     ox, oy = _to_px(0, 0)
-    draw.ellipse([ox - 8, oy - 8, ox + 8, oy + 8], fill=LABEL_COLOR)
-    draw.text((ox + 8, oy - 8), "(0,0)", fill=LABEL_COLOR, font=_FONT_MD)
+    draw.ellipse([ox - 8, oy - 8, ox + 8, oy + 8], fill=_P_LABEL)
+    _, font_md, _ = _get_fonts()
+    draw.text((ox + 8, oy - 8), "(0,0)", fill=_P_LABEL, font=font_md)
     ex, ey = _to_px(FIELD_INCHES // CELL_SIZE, 0)
-    draw.text((ex + 5, ey - 15), "+x 180°", fill=LABEL_COLOR, font=_FONT_MD)
+    draw.text((ex + 5, ey - 15), "+x 180°", fill=_P_LABEL, font=font_md)
     yx, yy = _to_px(0, FIELD_INCHES // CELL_SIZE + 1)
-    draw.text((yx, yy), "+y 90°", fill=LABEL_COLOR, font=_FONT_MD)
+    draw.text((yx, yy), "+y 90°", fill=_P_LABEL, font=font_md)
 
-    return img
-
-
-# Per-phase timing accumulators (seconds).
-_timings: dict[str, float] = {
-    "bg_hash": 0.0,
-    "bg_render": 0.0,
-    "bg_copy": 0.0,
-    "balls": 0.0,
-    "agents": 0.0,
-    "hud_step_render": 0.0,
-    "hud_step_paste": 0.0,
-    "hud_robot_render": 0.0,
-    "hud_robot_paste": 0.0,
-    "hud_ball_render": 0.0,
-    "hud_ball_paste": 0.0,
-    "tobytes": 0.0,
-}
-_frame_count: int = 0
+    return np.array(img)
 
 
-def get_render_timings() -> dict[str, float]:
-    """Return accumulated render phase timings and reset them."""
-    global _frame_count
-    result = {k: v for k, v in _timings.items()}
-    result["frames"] = float(_frame_count)
-    for k in _timings:
-        _timings[k] = 0.0
-    _frame_count = 0
-    return result
+from push_back.env.perf import PerfAccum
+
+_perf = PerfAccum()
+
+
+def get_render_perf() -> PerfAccum:
+    """Return the module-level render PerfAccum (call once after the loop)."""
+    return _perf
 
 
 def render_state(
@@ -257,129 +229,130 @@ def render_state(
     step: int | None = None,
 ) -> Image.Image:
     """Return a PIL Image of the current field state."""
-    global _frame_count
-    _frame_count += 1
+    tm = _perf
 
-    t = time.perf_counter()
-    blocked = frozenset(state.blocked_cells)
-    segments = tuple(
-        (seg.ax, seg.ay, seg.bx, seg.by) for seg in state.collision_segments
-    )
-    goals = tuple(
-        (g.interface_a_inches, g.interface_b_inches, g.capacity) for g in state.goals
-    )
-    _timings["bg_hash"] += time.perf_counter() - t
+    with tm.section("bg_hash"):
+        blocked = frozenset(state.blocked_cells)
+        segments = tuple(
+            (seg.ax, seg.ay, seg.bx, seg.by) for seg in state.collision_segments
+        )
+        goals = tuple(
+            (g.interface_a_inches, g.interface_b_inches, g.capacity)
+            for g in state.goals
+        )
 
-    t = time.perf_counter()
-    bg = _render_background(blocked, segments, goals, ppi, draw_grid=draw_grid)
-    _timings["bg_render"] += time.perf_counter() - t
+    with tm.section("bg_render"):
+        bg_array = _render_background(
+            blocked, segments, goals, ppi, draw_grid=draw_grid
+        )
 
-    t = time.perf_counter()
-    img = bg.copy()
-    draw = ImageDraw.Draw(img)
-    _timings["bg_copy"] += time.perf_counter() - t
+    with tm.section("bg_copy"):
+        img = Image.fromarray(bg_array, mode="P")
+        img.putpalette(FLAT_PALETTE)
+        draw = ImageDraw.Draw(img)
 
     # balls — aggregate by cell
-    t = time.perf_counter()
-    ball_r = int(BALL_DIA / 2 * ppi)
-    cell_balls: dict[tuple[int, int], dict[int, int]] = defaultdict(
-        lambda: defaultdict(int)
-    )
-    for row in state.balls_on_field:
-        bx, by, color = int(row[0]), int(row[1]), int(row[2])
-        cell_balls[(bx, by)][color] += 1
-    for (bx, by), colors in cell_balls.items():
-        px, py = _to_px(bx, by)
-        red_n = colors.get(int(BallColor.RED), 0)
-        blue_n = colors.get(int(BallColor.BLUE), 0)
-        total = red_n + blue_n
-        if total == 1:
-            c = BallColor.RED if red_n else BallColor.BLUE
-            draw.ellipse(
-                [px - ball_r, py - ball_r, px + ball_r, py + ball_r],
-                fill=BALL_COLORS[c],
-            )
-        elif red_n > 0 and blue_n > 0:
-            # Mixed — left half red, right half blue
-            draw.pieslice(
-                [px - ball_r, py - ball_r, px + ball_r, py + ball_r],
-                90,
-                270,
-                fill=BALL_COLORS[BallColor.RED],
-            )
-            draw.pieslice(
-                [px - ball_r, py - ball_r, px + ball_r, py + ball_r],
-                270,
-                90,
-                fill=BALL_COLORS[BallColor.BLUE],
-            )
-            draw.text((px - ball_r, py - 5), str(red_n), fill="white", font=_FONT_SM)
-            draw.text((px + 2, py - 5), str(blue_n), fill="white", font=_FONT_SM)
-        else:
-            # Single color, multiple balls
-            c = BallColor.RED if red_n else BallColor.BLUE
-            draw.ellipse(
-                [px - ball_r, py - ball_r, px + ball_r, py + ball_r],
-                fill=BALL_COLORS[c],
-            )
-            draw.text((px - 4, py - 5), str(total), fill="white", font=_FONT_SM)
-    _timings["balls"] += time.perf_counter() - t
+    with tm.section("balls"):
+        font_sm, _, _ = _get_fonts()
+        ball_r = int(BALL_DIA / 2 * ppi)
+        cell_balls: dict[tuple[int, int], dict[int, int]] = defaultdict(
+            lambda: defaultdict(int)
+        )
+        for row in state.balls_on_field:
+            bx, by, color = int(row[0]), int(row[1]), int(row[2])
+            cell_balls[(bx, by)][color] += 1
+        for (bx, by), colors in cell_balls.items():
+            px, py = _to_px(bx, by)
+            red_n = colors.get(int(BallColor.RED), 0)
+            blue_n = colors.get(int(BallColor.BLUE), 0)
+            total = red_n + blue_n
+            if total == 1:
+                c = BallColor.RED if red_n else BallColor.BLUE
+                draw.ellipse(
+                    [px - ball_r, py - ball_r, px + ball_r, py + ball_r],
+                    fill=_P_BALL[c],
+                )
+            elif red_n > 0 and blue_n > 0:
+                draw.pieslice(
+                    [px - ball_r, py - ball_r, px + ball_r, py + ball_r],
+                    90,
+                    270,
+                    fill=_P_BALL_RED,
+                )
+                draw.pieslice(
+                    [px - ball_r, py - ball_r, px + ball_r, py + ball_r],
+                    270,
+                    90,
+                    fill=_P_BALL_BLUE,
+                )
+                draw.text(
+                    (px - ball_r, py - 5), str(red_n), fill=_P_WHITE, font=font_sm
+                )
+                draw.text((px + 2, py - 5), str(blue_n), fill=_P_WHITE, font=font_sm)
+            else:
+                c = BallColor.RED if red_n else BallColor.BLUE
+                draw.ellipse(
+                    [px - ball_r, py - ball_r, px + ball_r, py + ball_r],
+                    fill=_P_BALL[c],
+                )
+                draw.text((px - 4, py - 5), str(total), fill=_P_WHITE, font=font_sm)
 
-    # agents — paste cached sprites
-    t = time.perf_counter()
-    r = int(AGENT_RADIUS)
-    pad = 4
-    for i, pose in enumerate(state.agents):
-        color = AGENT_COLORS[i] if i < len(AGENT_COLORS) else (200, 200, 200)
-        held = state.robot_held_balls[i]
-        red_n = sum(1 for b in held if b == BallColor.RED)
-        blue_n = sum(1 for b in held if b == BallColor.BLUE)
-        sprite = _make_agent_sprite(pose.heading, color, red_n, blue_n)
-        cx, cy = _to_px(pose.x, pose.y)
-        img.paste(sprite, (cx - r - pad, cy - r - pad), sprite)
-    _timings["agents"] += time.perf_counter() - t
-
-    # HUD panels — cached RGBA overlays
+    # agents — paste cached P-mode sprites via numpy
     from push_back.env.render_hud import (
+        make_agent_sprite,
         render_ball_panel,
         render_robot_panel,
         render_step_panel,
     )
 
+    with tm.section("agents"):
+        frame = np.array(img)  # writable copy for numpy pasting
+        r = int(AGENT_RADIUS)
+        pad = 4
+        for i, pose in enumerate(state.agents):
+            ci = _P_AGENTS[i] if i < len(_P_AGENTS) else _P_LABEL
+            held = state.robot_held_balls[i]
+            red_n = sum(1 for b in held if b == BallColor.RED)
+            blue_n = sum(1 for b in held if b == BallColor.BLUE)
+            sprite, mask = make_agent_sprite(pose.heading, ci, red_n, blue_n)
+            sh, sw = sprite.shape
+            cx, cy = _to_px(pose.x, pose.y)
+            y0, x0 = cy - r - pad, cx - r - pad
+            dest = frame[y0 : y0 + sh, x0 : x0 + sw]
+            dest[mask] = sprite[mask]
+
+    # HUD — paste cached P-mode panels (black bg, direct copy)
     y_cursor = 4
-    t = time.perf_counter()
-    if step is not None:
-        step_img = render_step_panel(step)
-        _timings["hud_step_render"] += time.perf_counter() - t
-        t = time.perf_counter()
-        img.paste(step_img, (2, y_cursor), step_img)
-        y_cursor += step_img.height + 2
-    _timings["hud_step_paste"] += time.perf_counter() - t
+    with tm.section("hud_step"):
+        if step is not None:
+            panel = render_step_panel(step)
+            ph, pw = panel.shape
+            frame[y_cursor : y_cursor + ph, 2 : 2 + pw] = panel
+            y_cursor += ph + 2
 
-    t = time.perf_counter()
-    positions = tuple((p.x, p.y) for p in state.agents)
-    robot_img = render_robot_panel(positions)
-    _timings["hud_robot_render"] += time.perf_counter() - t
-    t = time.perf_counter()
-    img.paste(robot_img, (2, y_cursor), robot_img)
-    y_cursor += robot_img.height + 4
-    _timings["hud_robot_paste"] += time.perf_counter() - t
+    with tm.section("hud_robot"):
+        positions = tuple((p.x, p.y) for p in state.agents)
+        panel = render_robot_panel(positions)
+        ph, pw = panel.shape
+        frame[y_cursor : y_cursor + ph, 2 : 2 + pw] = panel
+        y_cursor += ph + 4
 
-    t = time.perf_counter()
-    indexed_balls = tuple(
-        sorted(
-            (
-                (i, int(row[0]), int(row[1]), int(row[2]))
-                for i, row in enumerate(state.balls_on_field)
+    with tm.section("hud_ball"):
+        indexed_balls = tuple(
+            sorted(
+                (
+                    (i, int(row[0]), int(row[1]), int(row[2]))
+                    for i, row in enumerate(state.balls_on_field)
+                ),
+                key=lambda b: (b[3], b[0]),
             ),
-            key=lambda b: (b[3], b[0]),
         )
-    )
-    y_cursor += 20
-    ball_img = render_ball_panel(indexed_balls)
-    _timings["hud_ball_render"] += time.perf_counter() - t
-    t = time.perf_counter()
-    img.paste(ball_img, (2, y_cursor), ball_img)
-    _timings["hud_ball_paste"] += time.perf_counter() - t
+        y_cursor += 20
+        panel = render_ball_panel(indexed_balls)
+        ph, pw = panel.shape
+        frame[y_cursor : y_cursor + ph, 2 : 2 + pw] = panel
 
+    with tm.section("to_pil"):
+        img = Image.fromarray(frame, "P")
+        img.putpalette(FLAT_PALETTE)
     return img
