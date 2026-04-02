@@ -17,7 +17,7 @@ from pettingzoo import ParallelEnv
 from push_back.env.robots.base import BaseRobot
 from push_back.env.robots.stand_still import StandStill
 from push_back.env.render import render_state
-from push_back.env.field import make_default_goals, make_collision_segments
+from push_back.env.field_copy_with_barrier import make_default_goals, make_collision_segments # modified import to include barrier segments
 from push_back.env.collision import compute_blocked_cells, resolve_moves
 from push_back.env.state import (
     BallColor,
