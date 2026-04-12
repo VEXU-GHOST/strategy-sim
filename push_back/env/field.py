@@ -133,4 +133,14 @@ def make_collision_segments(goals: list[Goal]) -> list[CollisionSegment]:
     ]
     for goal in goals:
         segments.extend(_goal_rect_segments(goal))
+    # added barrier segments, as verbally pointed out by Hasif in the actual competition
+    # note: (ax, ay, bx, by)
+    barrier_segments: list[CollisionSegment] = [
+        CollisionSegment(20, 50, 30, 50),
+        CollisionSegment(30, 50, 30, 90),
+        CollisionSegment(30, 90, 20, 90),
+        CollisionSegment(20, 90, 20, 50),
+    ]
+    segments.extend(barrier_segments)
+    print(f"Total segments: {len(segments)}")
     return segments
