@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import math
 
-from push_back.env.field import CollisionSegment
+from push_back.env.field import CollisionSegment # modified import to include barrier segments
 from push_back.env.state import CELL_SIZE, GRID_SIZE, Pose
 
 

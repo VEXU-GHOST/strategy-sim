@@ -6,7 +6,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HOOK="$REPO_ROOT/.git/hooks/pre-commit"
 
 echo "Installing dev dependencies..."
-pip install -e "$REPO_ROOT[dev]"
+pip install -e "${REPO_ROOT}[dev]"
 
 echo "Installing pre-commit hook..."
 cat > "$HOOK" << 'EOF'
