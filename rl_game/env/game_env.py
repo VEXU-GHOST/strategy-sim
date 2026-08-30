@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import numpy as np
 from typing import Dict, Tuple, Any
-
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -30,6 +29,16 @@ State    = np.ndarray          # shape (NUM_CHANNELS, BOARD_SIZE, BOARD_SIZE)
 AgentID  = str                 # "A0", "A1", "B0", "B1"
 Actions  = Dict[AgentID, int]  # {agent_id: action_int}
 Rewards  = Dict[AgentID, float]
+# 0:b/y   1:r/y    2:r/b   3:y/y   4: cup
+b/y = 1
+r/y = 2
+r/b = 3
+y/y = 4
+y/b = 5
+y/r = 6
+b/r = 7
+g/c = 8
+c/g = 9
 
 
 class AgentState:
@@ -79,38 +88,18 @@ class AgentState:
                 self.held_items[pick] = 1
         return drop, pick
             
-    def scoreGoal(self, score: int) -> int: #0:y 1:r 2:b 3:gray 4:clear
-        if (score>2 and self.held_items[4]==1):
-            if score==3:
-                return 4
-            else:
-                return 3
-        pin = -1
-        for i in range(0,3):
-            if(self.held_items[i]==1):
-                pin = i
-        # print(str(self.held_items))
-        grid = [0,0,0,0,0]
-        if(pin == 0):
-            grid[0] = 1
-            grid[2] = 1
-        if(pin == 1):
-            grid[0] = 1
-            grid[1] = 1
-        if(pin == 2):
-            grid[1] = 1
-            grid[2] = 1
-        if(pin == 3):
-            grid[0] = 1
-            grid[0] = 1
-        if(pin == 4):
-            grid[3] = 1
-            grid[4] = 1
-        if grid[score]!=1:
-            return -1
-        for i in range(0,4):
-            if grid[i] == 1:
-                return i
+    def findCupType(self, score: int) -> int: #0:y 1:r 2:b 3:gray 4:clear
+        if((score==1 or score==5) and self.held_items[0]==1):
+            return 0
+        if((score==2 or score==6) and self.held_items[1]==1):
+            return 1
+        if((score==3 or score==7) and self.held_items[2]==1):
+            return 2
+        if(score==4 and self.held_items[3]==1):
+            return 3
+        if((score==9 or score==8) and self.held_items[4]==1):
+            return 4
+        return -1
         
         
             
@@ -231,16 +220,17 @@ class GameEnv:
             [11, 29, 0],
         ], dtype=int)
         self.goalStates = np.array([
-            [0,0,0,3],
-            [0,0,0,3],
-            [0,0,0,3],
-            [0,0,0,3],
-            [1,0,0,0],
-            [1,0,0,0],
-            [1,0,0,0],
-            [1,0,0,0],
-            [1,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0],
         ])
+        self.goalLen = np.array([0,0,0,0,0,0,0,0,0])
         self.points = {aid: 0.0 for aid in self.AGENT_IDS}
         # Spawn agents at configured positions
         self._agents = {}
@@ -449,8 +439,8 @@ class GameEnv:
             action_num //= 6
             drop = action_num % 6
             action_num //= 6
-            score = action_num % 6
-            if score==5:
+            score = action_num % 10
+            if score==0:
                 score==-1
             if drop==5:
                 drop==-1
@@ -505,16 +495,18 @@ class GameEnv:
                 
                 if(not self.checkScoring(agent.row, agent.col, agent.team)):
                     score = -1
-                botSide = agent.scoreGoal(score)
-                if(botSide!=-1): 
+                usedCup = agent.findCupType(score)
+                if(usedCup!=-1): 
                     val = self.findGoal(agent.row, agent.col)
-                    self.processGoal(val, score, botSide)
+                    processed = self.processGoal(val, score, usedCup)
+                    if(processed==True):
+                        agent.held_items[usedCup]-=1
 
         for i in range (4):
             if(changeFlagR[i]==1 and changeFlagB[i]==0):
-                self.zoneColors[i] = 1;
+                self.zoneColors[i] = 1
             if(changeFlagR[i]==0 and changeFlagB[i]==1):
-                self.zoneColors[i] = 2;
+                self.zoneColors[i] = 2
 
 
         
@@ -525,8 +517,8 @@ class GameEnv:
             action_num //= 6
             drop = action_num % 6
             action_num //= 6
-            score = action_num % 6
-            if score==5:
+            score = action_num % 10
+            if score==0:
                 score==-1
             if drop==5:
                 drop==-1
@@ -600,21 +592,17 @@ class GameEnv:
 
     #team 0 = red
 
-    def processGoal(self, val:int, score:int, bot:int):
-        if(self.goalStates[val][3]<3 and bot<3):
-            return
-        if(self.goalStates[val][3]>2 and bot>2):
-            return
-        # print("processGoal "+str(self.goalStates[val]))
-        if(self.goalStates[val][3]==3):
-            self.goalStates[val][score]+=1
-        if(self.goalStates[val][3]==4):
-            self.goalStates[val][score]+=1
-            self.goalStates[val][bot]+=1
-        if(bot==3):
-            self.goalStates[val][self.goalStates[val][3]]-=1
-        self.goalStates[val][3] = score
-        # print("processGoal "+str(self.goalStates[val]))
+    def processGoal(self, val:int, score:int)->bool:
+        if(self.goalLen[val]>9):
+            return False
+        if(self.goalStates[val][self.goalLen[val]]>=8 and score>=8):
+            return False
+        if(self.goalStates[val][self.goalLen[val]]<8 and score<8):
+            return False
+        self.goalLen[val]+=1
+        self.goalStates[self.goalLen] = score
+        return True
+        
         
 
 
@@ -676,7 +664,6 @@ class GameEnv:
                 return False
         return True
             
-
 
     def checkCollision(self, row1, col1, row2, col2, radius) -> bool:
         dist = np.sqrt((row1 - row2) ** 2 + (col1 - col2) ** 2)
