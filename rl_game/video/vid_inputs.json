@@ -1,0 +1,39 @@
+{
+    "video": {
+        "quality": "medium",
+        "runtime": 1,
+        "background_color": "#000000"
+    },
+    "field": {
+        "x_range": [-5, 5, 1],
+        "y_range": [-5, 5, 1],
+        "x_length": 5,
+        "y_length": 5
+    },
+    "goals": {
+        "positions": [[9.5, 9.5], [9.5, 28.5], [28.5, 9.5], [28.5, 28.5]],
+        "radius": 0.25,
+        "color": "#880808",
+        "opacity": 1.0
+    },
+    "robot": {
+        "radius": 0.5,
+        "color": "#58C4DD",
+        "opacity": 1.0,
+        "heading_length": 0.5,
+        "heading_color": "#FFFF00",
+        "start_x": -1.0,
+        "start_y": 0.0
+    },
+    "simulation": {
+        "step_size": 1,
+        "boundary": 2.0,
+        "exploration_constant": 1.414,
+        "min_commands": 1,
+        "max_commands": 10,
+        "min_turn": -4,
+        "max_turn": 4,
+        "min_move": -4,
+        "max_move": 4
+    }
+}
