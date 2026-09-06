@@ -33,7 +33,7 @@ NUM_ACTIONS: int = 25
 # ---------------------------------------------------------------------------
 # Environment
 # ---------------------------------------------------------------------------
-BOARD_SIZE: int = 35          # Board is BOARD_SIZE × BOARD_SIZE
+BOARD_SIZE: int = 140          # Board is BOARD_SIZE × BOARD_SIZE
 NUM_CHANNELS: int = 5         # Channels in board tensor:
                               #   0 = empty, 1 = team-A agents,
                               #   2 = team-B agents, 3+ = custom objects

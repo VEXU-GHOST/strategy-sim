@@ -158,66 +158,66 @@ class GameEnv:
         self.blueMatchload[3] = 1
         self.blueMatchload[4] = 10
         # 0:b/y   1:r/y    2:r/b   3:y/y   4: cup
-        self._board[3][5][5] = 1
-        self._board[3][29][29] = 1
-        self._board[3][11][11] = 1
         self._board[3][23][23] = 1
-        self._board[3][17][17] = 1# mid diagonal
-        self._board[3][11][0] = 1
-        self._board[3][0][11] = 1
-        self._board[3][23][34] = 1
-        self._board[3][34][23] = 1
-        self._board[3][23][0] = 1
-        self._board[3][0][23] = 1
-        self._board[3][11][34] = 1
-        self._board[3][34][11] = 1# half corner
-        self._board[3][23][5] = 1   
-        self._board[3][29][11] = 1
-        self._board[3][5][23] = 1
-        self._board[3][11][29] = 1# non main diagonal
-        self._board[2][17][11] = 1
-        self._board[2][17][23] = 1
-        self._board[2][11][17] = 1
-        self._board[2][23][17] = 1# r/b
-        self._board[1][29][5] = 2
-        self._board[1][5][29] = 2
-        self._board[1][23][11] = 2
-        self._board[1][11][23] = 2# r/y
-        self._board[0][29][5] = 2
-        self._board[0][5][29] = 2
-        self._board[0][23][11] = 2
-        self._board[0][11][23] = 2# b/y
-        self._board[4][5][5] = 1
-        self._board[4][29][29] = 1
+        self._board[3][119][119] = 1
+        self._board[3][47][47] = 1
+        self._board[3][95][95] = 1
+        self._board[3][71][71] = 1# mid diagonal
+        self._board[3][47][0] = 1
+        self._board[3][0][47] = 1
+        self._board[3][95][139] = 1
+        self._board[3][139][95] = 1
+        self._board[3][95][0] = 1
+        self._board[3][0][95] = 1
+        self._board[3][47][139] = 1
+        self._board[3][139][47] = 1# half corner
+        self._board[3][95][23] = 1   
+        self._board[3][119][47] = 1
+        self._board[3][23][95] = 1
+        self._board[3][47][119] = 1# non main diagonal
+        self._board[2][71][47] = 1
+        self._board[2][71][95] = 1
+        self._board[2][47][71] = 1
+        self._board[2][95][71] = 1# r/b
+        self._board[1][119][23] = 2
+        self._board[1][23][119] = 2
+        self._board[1][95][47] = 2
+        self._board[1][47][95] = 2# r/y
+        self._board[0][119][23] = 2
+        self._board[0][23][119] = 2
+        self._board[0][95][47] = 2
+        self._board[0][47][95] = 2# b/y
         self._board[4][23][23] = 1
-        self._board[4][11][11] = 1
-        self._board[4][11][0] = 3
-        self._board[4][0][11] = 3
-        self._board[4][23][0] = 3
-        self._board[4][0][23] = 3
-        self._board[4][11][34] = 3
-        self._board[4][34][11] = 3
-        self._board[4][23][34] = 3
-        self._board[4][34][23] = 3
-        self._board[4][5][29] = 1
-        self._board[4][29][5] = 1
-        self._board[4][11][23] = 1
-        self._board[4][23][11] = 1
+        self._board[4][119][119] = 1
+        self._board[4][95][95] = 1
+        self._board[4][47][47] = 1
+        self._board[4][47][0] = 3
+        self._board[4][0][47] = 3
+        self._board[4][95][0] = 3
+        self._board[4][0][95] = 3
+        self._board[4][47][139] = 3
+        self._board[4][139][47] = 3
+        self._board[4][95][139] = 3
+        self._board[4][139][95] = 3
+        self._board[4][23][119] = 1
+        self._board[4][119][23] = 1
+        self._board[4][47][95] = 1
+        self._board[4][95][47] = 1
 
-        self._board[4][17][11] = 1
-        self._board[4][17][23] = 1
-        self._board[4][11][17] = 1
-        self._board[4][23][17] = 1#cups
+        self._board[4][71][47] = 1
+        self._board[4][71][95] = 1
+        self._board[4][47][71] = 1
+        self._board[4][95][71] = 1#cups
         self.fieldObject = np.array([
-            [5, 11, 0],
-            [11, 5, 0],
-            [23, 29, 0],
-            [29, 23, 0],
-            [17, 17, 0],
-            [23, 5, 0],
-            [29, 11, 0],
-            [5, 23, 0],
-            [11, 29, 0],
+            [23, 47, 0],
+            [47, 23, 0],
+            [95, 119, 0],
+            [119, 95, 0],
+            [71, 71, 0],
+            [95, 23, 0],
+            [119, 47, 0],
+            [23, 95, 0],
+            [47, 119, 0],
         ], dtype=int)
         self.goalStates = np.array([
             [0,0,0,0,0,0,0,0,0,0],
@@ -576,14 +576,14 @@ class GameEnv:
 
     def insideZone(self, team:int, row:int, col:int)->int:
         if(team==0):
-            if col<=5 or col>=29:
+            if col<=23 or col>=119:
                 if(row<=3):
                     return 1
                 if(row>=31):
                     return -1
             return 0
         elif(team==1):
-            if col<=5 or col>=29:
+            if col<=23 or col>=119:
                 if(row>=31):
                     return 1
                 if(row<=3):
@@ -708,26 +708,26 @@ class GameEnv:
         blue = 0
         red = 0
         agent = self._agents["B0"]
-        sum = abs(agent.row-17)
-        sum+=abs(agent.col-17)
+        sum = abs(agent.row-71)
+        sum+=abs(agent.col-71)
         if(sum<=8):
             red+=8
 
         agent = self._agents["B1"]
-        sum = abs(agent.row-17)
-        sum+=abs(agent.col-17)
+        sum = abs(agent.row-71)
+        sum+=abs(agent.col-71)
         if(sum<=8):
             red+=8
 
         agent = self._agents["A0"]
-        sum = abs(agent.row-17)
-        sum+=abs(agent.col-17)
+        sum = abs(agent.row-71)
+        sum+=abs(agent.col-71)
         if(sum<=8):
             blue+=8
 
         agent = self._agents["A1"]
-        sum = abs(agent.row-17)
-        sum+=abs(agent.col-17)
+        sum = abs(agent.row-71)
+        sum+=abs(agent.col-71)
         if(sum<=8):
             blue+=8
 
