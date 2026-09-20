@@ -1,157 +1,186 @@
+"""Render a simplified, animated version of the competition field in Manim.
+
+Run from this folder so ``vid_inputs.json`` is found:
+    manim -pqh manim_test.py VexSim
 """
-IMPORT STATEMENTS:
-Manim here is used for 3Blue1Brown-style animations and visualization.
-The random library is for pseudorandom number generation and controls the robot translation and rotation.
-Numpy is here for complicated mathematical operations.
-The json library is used for taking in a JSON file with robot and field limtis as parameters.
-"""
-from manim import *
-import random
-import numpy as np
+
+from __future__ import annotations
+
 import json
+import random
+from pathlib import Path
+
+import numpy as np
+from manim import *
 
 
-"""
-FILE INPUT:
-Using json, this opens the file with the parameters.
-"""
-with open("vid_inputs.json") as f:
-    cfg = json.load(f)
+CONFIG_PATH = Path(__file__).with_name("vid_inputs.json")
+with CONFIG_PATH.open() as file:
+    cfg = json.load(file)
 
-
-"""
-CONSTANTS:
-Runtime determines the .mp4 video file's length.
-Steps are simple discrete time steps that advanced the simulation incrementally.
-Boundary sets the field borders and stops the robot.
-Mininum Commands is the lower boundary for the amount of instructions for the robot, with the resulting list length always even since each command appends two items.
-Maximum Commands is the upper boundary for the amount of instructions for the robot, with the resulting list length always even since each command appends two items.
-Mininum Turn is the lower boundary for the amount of rotation instructions for the robot.
-Maximum Turn is the upper boundary for the amount of rotation instructions for the robot.
-Mininum Move is the lower boundary for the amount of translation instructions for the robot.
-Maximum Move is the upper boundary for the amount of translation instructions for the robot.
-"""
-RUNTIME  = cfg["video"]["runtime"]
-STEP     = cfg["simulation"]["step_size"]
-BOUNDARY = cfg["simulation"]["boundary"]
-MIN_CMD  = cfg["simulation"]["min_commands"]
-MAX_CMD  = cfg["simulation"]["max_commands"]
+RUNTIME = cfg["video"]["runtime"]
+STEP = cfg["simulation"]["step_size"]
+MIN_CMD = cfg["simulation"]["min_commands"]
+MAX_CMD = cfg["simulation"]["max_commands"]
 MIN_TURN = cfg["simulation"]["min_turn"]
 MAX_TURN = cfg["simulation"]["max_turn"]
 MIN_MOVE = cfg["simulation"]["min_move"]
 MAX_MOVE = cfg["simulation"]["max_move"]
 
+FIELD_HALF_WIDTH = cfg["field"]["half_width"]
+FIELD_HALF_HEIGHT = cfg["field"]["half_height"]
 
-"""
-DIRECTION MAP:
-Simply the cardinal directions with their diagonals.
-East
-Northeast
-North
-Northwest
-West
-Southwest
-South
-Southeast
-"""
 DIR_MAP = {
-    0: np.array([ 1,  0, 0]),
-    1: np.array([ 1,  1, 0]),
-    2: np.array([ 0,  1, 0]),
-    3: np.array([-1,  1, 0]),
-    4: np.array([-1,  0, 0]),
-    5: np.array([-1, -1, 0]),
-    6: np.array([ 0, -1, 0]),
-    7: np.array([ 1, -1, 0]),
+    0: np.array([1.0, 0.0, 0.0]),
+    1: np.array([1.0, 1.0, 0.0]) / np.sqrt(2),
+    2: np.array([0.0, 1.0, 0.0]),
+    3: np.array([-1.0, 1.0, 0.0]) / np.sqrt(2),
+    4: np.array([-1.0, 0.0, 0.0]),
+    5: np.array([-1.0, -1.0, 0.0]) / np.sqrt(2),
+    6: np.array([0.0, -1.0, 0.0]),
+    7: np.array([1.0, -1.0, 0.0]) / np.sqrt(2),
 }
 
 
-"""
-MANIM SCENE CLASS:
-This makes the overall Manim scene using one function and a lot of logic.
-"""
+def field_point(point: list[float]) -> np.ndarray:
+    """Convert a two-dimensional config point into Manim coordinates."""
+    return np.array([point[0], point[1], 0.0])
+
+
+def make_cup(center: np.ndarray, top_color: ManimColor) -> VGroup:
+    """A cup is a circle split into a coloured top half and a white bottom."""
+    radius = 0.28
+    outline = Circle(radius=radius, color=BLACK, stroke_width=3)
+    top = Arc(radius=radius, start_angle=0, angle=PI).set_fill(top_color, 1)
+    top.set_stroke(width=0)
+    bottom = Arc(radius=radius, start_angle=PI, angle=PI).set_fill(WHITE, 1)
+    bottom.set_stroke(width=0)
+    divider = Line(LEFT * radius, RIGHT * radius, color=BLACK, stroke_width=2)
+    cup = VGroup(top, bottom, outline, divider)
+    cup.move_to(center)
+    return cup
+
+
+def make_pin(center: np.ndarray, top_color: ManimColor, bottom_color: ManimColor) -> VGroup:
+    """A compact hexagonal pin, visually close to the supplied field diagram."""
+    top = Polygon(
+        LEFT * 0.22 + UP * 0.02,
+        UP * 0.22,
+        RIGHT * 0.22 + UP * 0.02,
+        RIGHT * 0.22 + DOWN * 0.10,
+        LEFT * 0.22 + DOWN * 0.10,
+        color=BLACK,
+        stroke_width=3,
+    ).set_fill(top_color, 1)
+    bottom = Polygon(
+        LEFT * 0.22 + DOWN * 0.10,
+        RIGHT * 0.22 + DOWN * 0.10,
+        RIGHT * 0.22 + DOWN * 0.30,
+        DOWN * 0.43,
+        LEFT * 0.22 + DOWN * 0.30,
+        color=BLACK,
+        stroke_width=3,
+    ).set_fill(bottom_color, 1)
+    pin = VGroup(top, bottom)
+    pin.move_to(center)
+    return pin
+
+
+def make_robot(center: np.ndarray, body_color: ManimColor) -> VGroup:
+    """A simple four-arm robot with a heading arrow."""
+    core = Circle(radius=0.25, color=BLACK, stroke_width=3).set_fill(YELLOW, 1).shift(UP * 0.25)
+    arms = VGroup(
+        Triangle().scale(0.18).set_fill(body_color, 1).set_stroke(BLACK, 2).shift(UP * 0.44),
+        Triangle().scale(0.18).rotate(PI).set_fill(body_color, 1).set_stroke(BLACK, 2).shift(DOWN * 0.44),
+        Triangle().scale(0.18).rotate(-PI / 2).set_fill(body_color, 1).set_stroke(BLACK, 2).shift(LEFT * 0.44),
+        Triangle().scale(0.18).rotate(PI / 2).set_fill(body_color, 1).set_stroke(BLACK, 2).shift(RIGHT * 0.44),
+    )
+    heading = Arrow(ORIGIN, RIGHT * 0.60, buff=0.18, color=WHITE, stroke_width=4).shift(UP * 0.25)
+    robot = VGroup(arms, core, heading)
+    robot.move_to(center)
+    return robot
+
+
 class VexSim(Scene):
+    """Animate one robot moving around a visual model of the game field."""
 
-    # Function here is for setting all variables and objects, then running their respective logic.
-    def construct(self):
+    def build_field(self) -> tuple[VGroup, list[Circle]]:
+        layout = cfg["layout"]
+        field = VGroup()
+        obstacles: list[Circle] = []
 
-        # This reads from the JSON file for all things under "field".
-        # The field will take the form of a numberplane.
-            # This sets the field width positions the robot can take.
-            # This sets the field height positions the robot can take.
-            # This sets the rendered field's horizontal squares.
-            # This sets the rendered field's vertical squares.
-        # The animation for drawing the field is played.
-        # A small wait happens.
-        fc = cfg["field"]
-        field = NumberPlane(
-            x_range = fc["x_range"],
-            y_range = fc["y_range"],
-            x_length = fc["x_length"],
-            y_length = fc["y_length"]
-        )
-        self.play(Create(field))
-        self.wait()
+        board = Rectangle(
+            width=2 * FIELD_HALF_WIDTH,
+            height=2 * FIELD_HALF_HEIGHT,
+            color=GREY_B,
+            stroke_width=4,
+        ).set_fill(GREY_D, opacity=0.88)
+        field.add(board)
 
-        # This reads from the JSON file for all things under "robot".
-        # The robot body takes the form of a circle of a certain radius, color, and opacity.
-        # The bot's direction it is facing, represented as a line, is intialized as the rightward (east) direction.
-        # The bot is positioned at a pair of x and y coordinates.
-        # A Mobject for the robot is actualized.
-        # Bot Mobject is added.
-        rc = cfg["robot"]
-        body = Circle(radius = rc["radius"]).set_fill(rc["color"], opacity = rc["opacity"])
-        heading = Line(ORIGIN, RIGHT * rc["heading_length"]).set_color(rc["heading_color"])
-        start = np.array([rc["start_x"], rc["start_y"], 0.0])
-        robot = VGroup(body, heading).move_to(start)
-        self.add(robot)
+        for x in (-3, 0, 3):
+            field.add(DashedLine([x, -FIELD_HALF_HEIGHT, 0], [x, FIELD_HALF_HEIGHT, 0], color=GREY_C, stroke_opacity=0.35))
+        for y in (-3, 0, 3):
+            field.add(DashedLine([-FIELD_HALF_WIDTH, y, 0], [FIELD_HALF_WIDTH, y, 0], color=GREY_C, stroke_opacity=0.35))
 
-        # An empty list for instructions is initialized.
-        # A certain amount of robot commands is generated.
-        # The for loop is initialized, running for a number of iterations equal to the number of commands.
-            # The bot will turn a certain angle.
-            # That rotation is appended to the list.
-            # The bot will move a certain distance.
-            # That translation is appended to the list.
-        # A small print statement for debugging.
-        instrs = []
-        cmd = random.randint(MIN_CMD, MAX_CMD)
-        for i in range(cmd):
-            turn = random.randint(MIN_TURN, MAX_TURN)
-            instrs.append(turn)
-            move = random.randint(MIN_MOVE, MAX_MOVE)
-            instrs.append(move)
-        print(instrs)
+        for start, end in layout["diagonals"]:
+            field.add(Line(field_point(start), field_point(end), color=WHITE, stroke_width=4))
 
-        # The bot's angle is intialized as zero.
-        # The position from before is copied over for the robot's starting place.
+        for start, end, color in layout["alliance_corners"]:
+            field.add(Line(field_point(start), field_point(end), color=color, stroke_width=4))
+
+        for start, end in layout["loaders"]:
+            field.add(Line(field_point(start), field_point(end), color=YELLOW, stroke_width=8))
+
+        for point in layout["gray_cups"]:
+            cup = make_cup(field_point(point), GREY_D)
+            field.add(cup)
+            obstacles.append(Circle(radius=0.32).move_to(cup.get_center()))
+
+        for point in layout["clear_cups"]:
+            cup = make_cup(field_point(point), WHITE)
+            field.add(cup)
+            obstacles.append(Circle(radius=0.32).move_to(cup.get_center()))
+
+        for point, colors in layout["pins"]:
+            field.add(make_pin(field_point(point), colors[0], colors[1]))
+
+        for point, color in layout["goals"]:
+            field.add(Circle(radius=0.27, color=BLACK, stroke_width=3).set_fill(color, 1).move_to(field_point(point)))
+
+        return field, obstacles
+
+    def construct(self) -> None:
+        self.camera.background_color = cfg["video"]["background_color"]
+        field, cup_obstacles = self.build_field()
+        self.play(FadeIn(field), run_time=1.0)
+
+        robot_config = cfg["robot"]
+        robot = make_robot(field_point(robot_config["start"]), robot_config["color"])
+        self.play(FadeIn(robot), run_time=0.4)
+
         angle = 0
-        pos = start.copy()
+        position = robot.get_center().copy()
+        command_count = random.randint(MIN_CMD, MAX_CMD)
 
-        # Another for loop here for running through each instruction command.
-            # An even index in the list is a rotation.
-                # Turns are snapped to any multiple of 45 degrees.
-                # The next angle is set as a multiple of 45.
-            # An odd index in the list is a translation.
-                # Direction is looked up from the direction map based on the current heading angle.
-                # The new position is based off the old plus the product of a direction vector, a spatial step size, and a move scalar.
-                # All positions are clamped by the borders.
-                # The x position is clamped upon collision.
-                # The y position is clamped upon collision.
-        for i, instr in enumerate(instrs):
-            if i % 2 == 0:
-                self.play(robot.animate.rotate(45 * instr * DEGREES), rate_func=linear, run_time=RUNTIME)
-                angle += 45 * instr
+        for _ in range(command_count):
+            turn = random.randint(MIN_TURN, MAX_TURN)
+            angle = (angle + 45 * turn) % 360
+            self.play(robot.animate.rotate(45 * turn * DEGREES, about_point=robot.get_center()), run_time=RUNTIME)
+
+            distance = random.randint(MIN_MOVE, MAX_MOVE) * STEP
+            direction = DIR_MAP[(angle // 45) % 8]
+            candidate = position + direction * distance
+
+            inside_field = (
+                -FIELD_HALF_WIDTH + 0.45 <= candidate[0] <= FIELD_HALF_WIDTH - 0.45
+                and -FIELD_HALF_HEIGHT + 0.45 <= candidate[1] <= FIELD_HALF_HEIGHT - 0.45
+            )
+            hits_cup = any(np.linalg.norm(candidate[:2] - cup.get_center()[:2]) < 0.70 for cup in cup_obstacles)
+
+            if inside_field and not hits_cup:
+                self.play(robot.animate.move_to(candidate), run_time=RUNTIME, rate_func=linear)
+                position = candidate
             else:
-                direction = DIR_MAP[(angle // 45) % 8]
-                new_pos = pos + direction * STEP * instr
-                clamped = new_pos.copy()
-                clamped[0] = np.clip(round(clamped[0]), -BOUNDARY, BOUNDARY)
-                clamped[1] = np.clip(round(clamped[1]), -BOUNDARY, BOUNDARY)
+                self.play(Indicate(robot, color=RED), run_time=0.3)
 
-                # Only move if the new position is within bounds.
-                    # The animation for moving the bot plays.
-                    # The robot is transported.
-                if np.array_equal(new_pos, clamped):
-                    self.play(robot.animate.move_to(new_pos), rate_func=linear, run_time=RUNTIME)
-                    pos = new_pos
+        self.wait(1)
