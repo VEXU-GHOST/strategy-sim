@@ -5,8 +5,10 @@ Marcus' little prototype for a Monte Carlo Tree Search model, based on self-take
 
 # The math library is used for advanced calculations done in evaluation.
 # The random library is used for generating random numbers for robot states.
+# The field state is used for obtaining inputs and in turn taking the next action.
 import math
 import random
+import field_state
 
 
 # The runtime here determines how long the main loop will run.
@@ -46,8 +48,8 @@ def new_state(state):
     # The modified, new state is returned.
     new_state = state.copy()
     if random.randint(0, 1) == 0:
-        new_state[0] = random.randint(-4, 4)
-        new_state[1] = random.randint(-4, 4)
+        new_state[0] += random.randint(-4, 4)
+        new_state[1] += random.randint(-4, 4)
     else:
         new_state[2] += 45 * random.randint(-4, 4)
     return new_state
