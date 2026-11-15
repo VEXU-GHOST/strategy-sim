@@ -1,0 +1,180 @@
+{
+  "version": "vexu_override_field_v1",
+  "backend": "field",
+  "_notes": [
+    "Strategy RL on top of rl_game/env/vex_field_environment (Marcus's tick-based engine).",
+    "field_env is passed to that engine unchanged; goals/toggles/initial_robots and source positions are derived from it by vex_rl/config.py.",
+    "Layout follows the Override v2.1 manual text: 9 goals (2 red, 2 blue, 4 short neutral, 1 tall Midfield goal), 4 wall-center Toggles, 4 corner Loaders, triangular Quadrants.",
+    "Exact coordinates are a DRAFT: cups and corner pins come from field_config.json (video reference); goal/loader/toggle positions come from the manual's prose. Replace with official field-drawing values when available, then retrain.",
+    "Quadrant IDs: 0=west (red side), 1=north, 2=east (blue side), 3=south. 180-degree rotation maps q -> (q+2)%4, matching the PPO encoder."
+  ],
+  "field_size": 12.0,
+  "autonomous_seconds": 30.0,
+  "driver_seconds": 90.0,
+  "endgame_seconds": 10.0,
+  "action_seconds": {
+    "collect": 0.8,
+    "score": 1.0,
+    "set_toggle": 0.7,
+    "go_midfield": 0.5,
+    "wait": 0.75
+  },
+  "score_points": {
+    "alliance_colored_half": 5.0,
+    "yellow_half": 10.0,
+    "midfield_robot": 8.0,
+    "autonomous_bonus": 12.0
+  },
+  "awp": {
+    "scored_halves": 12,
+    "goals_with_two_halves": 4,
+    "required_midfield_robots": 1,
+    "required_no_perimeter_contact": true
+  },
+  "override_rules": {
+    "midfield_polygon": [[-1.8, 1.3], [1.3, 1.8], [1.8, -1.3], [-1.3, -1.8]],
+    "midfield_staging_distance": 0.85,
+    "home_quadrant": {"red": 0, "blue": 2},
+    "preload": true,
+    "matchload_driver_only": true,
+    "no_midfield_goal_in_endgame": true,
+    "autonomous_bonus_includes_midfield": true,
+    "perimeter_contact_margin": 0.05,
+    "spawn_jitter": 0.1
+  },
+  "reward": {
+    "score_difference_scale": 0.1,
+    "awp_bonus": 3.0,
+    "terminal_win_bonus": 4.0,
+    "wait_penalty_per_second": 0.02,
+    "duplicate_target_penalty": 0.04
+  },
+  "training": {
+    "gamma_per_second": 0.99,
+    "gae_lambda_per_second": 0.95,
+    "learning_rate": 0.0003,
+    "clip_epsilon": 0.2,
+    "entropy_coef": 0.015,
+    "value_coef": 0.5,
+    "max_grad_norm": 0.5,
+    "rollout_steps": 512,
+    "update_epochs": 4,
+    "minibatch_size": 128,
+    "hidden_size": 192
+  },
+  "sources": [
+    {"id": "L_RN", "type": "loader", "loader": "red_loader_north"},
+    {"id": "L_RS", "type": "loader", "loader": "red_loader_south"},
+    {"id": "L_BN", "type": "loader", "loader": "blue_loader_north"},
+    {"id": "L_BS", "type": "loader", "loader": "blue_loader_south"},
+    {"id": "Z_W", "type": "zone", "zone": "west"},
+    {"id": "Z_N", "type": "zone", "zone": "north"},
+    {"id": "Z_E", "type": "zone", "zone": "east"},
+    {"id": "Z_S", "type": "zone", "zone": "south"},
+    {"id": "Z_MID", "type": "zone", "zone": "midfield"}
+  ],
+  "symmetry": {
+    "goals": {
+      "G_RN": "G_BS", "G_BS": "G_RN",
+      "G_RS": "G_BN", "G_BN": "G_RS",
+      "G_NW": "G_SE", "G_SE": "G_NW",
+      "G_NE": "G_SW", "G_SW": "G_NE",
+      "G_MID": "G_MID"
+    },
+    "sources": {
+      "L_RN": "L_BS", "L_BS": "L_RN",
+      "L_RS": "L_BN", "L_BN": "L_RS",
+      "Z_W": "Z_E", "Z_E": "Z_W",
+      "Z_N": "Z_S", "Z_S": "Z_N",
+      "Z_MID": "Z_MID"
+    },
+    "toggles": {
+      "T_W": "T_E", "T_E": "T_W",
+      "T_N": "T_S", "T_S": "T_N"
+    }
+  },
+  "field_env": {
+    "field": {"half_width": 6.0, "half_height": 6.0},
+    "environment": {
+      "cells_per_foot": 6,
+      "seconds_per_step": 0.25,
+      "robot_radius": 0.45,
+      "robot_speed": 3.0,
+      "turn_speed": 180.0,
+      "interaction_reach": 0.95,
+      "goal_radius": 0.27,
+      "goal_capacity": 7,
+      "alternate_pin_and_cup": true,
+      "colored_face_points": 5.0,
+      "yellow_face_points": 10.0,
+      "collect_seconds": 0.8,
+      "score_seconds": 1.0,
+      "toggle_seconds": 0.7,
+      "matchload_seconds": 0.8,
+      "drop_seconds": 0.25,
+      "park_seconds": 0.5,
+      "wait_seconds": 0.75,
+      "sensor_range": 4.0,
+      "sensor_fov_degrees": 90.0
+    },
+    "robots": [
+      {"id": "A0", "team": "red", "position": [-5.2, 3.0], "heading": 0.0},
+      {"id": "A1", "team": "red", "position": [-5.2, -3.0], "heading": 0.0},
+      {"id": "B0", "team": "blue", "position": [5.2, -3.0], "heading": 180.0},
+      {"id": "B1", "team": "blue", "position": [5.2, 3.0], "heading": 180.0}
+    ],
+    "layout": {
+      "goals": [
+        {"id": "G_RN", "position": [-4.0, 2.0], "quadrant": 0, "owner": "red", "capacity": 7},
+        {"id": "G_RS", "position": [-4.0, -2.0], "quadrant": 0, "owner": "red", "capacity": 7},
+        {"id": "G_NW", "position": [-2.0, 4.0], "quadrant": 1, "owner": "neutral", "capacity": 7},
+        {"id": "G_NE", "position": [2.0, 4.0], "quadrant": 1, "owner": "neutral", "capacity": 7},
+        {"id": "G_BN", "position": [4.0, 2.0], "quadrant": 2, "owner": "blue", "capacity": 7},
+        {"id": "G_BS", "position": [4.0, -2.0], "quadrant": 2, "owner": "blue", "capacity": 7},
+        {"id": "G_SE", "position": [2.0, -4.0], "quadrant": 3, "owner": "neutral", "capacity": 7},
+        {"id": "G_SW", "position": [-2.0, -4.0], "quadrant": 3, "owner": "neutral", "capacity": 7},
+        {"id": "G_MID", "position": [0.0, 0.0], "quadrant": null, "owner": "neutral", "capacity": 11}
+      ],
+      "toggles": [
+        {"id": "T_W", "position": [-6.0, 0.0], "quadrant": 0},
+        {"id": "T_N", "position": [0.0, 6.0], "quadrant": 1},
+        {"id": "T_E", "position": [6.0, 0.0], "quadrant": 2},
+        {"id": "T_S", "position": [0.0, -6.0], "quadrant": 3}
+      ],
+      "matchloaders": [
+        {"id": "red_loader_north", "position": [-5.75, 5.75], "team": "red",
+         "stock": {"red_yellow": 5, "cup": 5, "yellow_yellow": 1}},
+        {"id": "red_loader_south", "position": [-5.75, -5.75], "team": "red",
+         "stock": {"red_yellow": 5, "cup": 5}},
+        {"id": "blue_loader_north", "position": [5.75, 5.75], "team": "blue",
+         "stock": {"blue_yellow": 5, "cup": 5}},
+        {"id": "blue_loader_south", "position": [5.75, -5.75], "team": "blue",
+         "stock": {"blue_yellow": 5, "cup": 5, "yellow_yellow": 1}}
+      ],
+      "parking_zones": [],
+      "gray_cups": [
+        [-2.4, 5.8], [-1.8, 5.8], [-1.2, 5.8], [1.2, 5.8], [1.8, 5.8], [2.4, 5.8],
+        [-5.8, 2.4], [-5.8, 1.8], [-5.8, 1.2], [5.8, 2.4], [5.8, 1.8], [5.8, 1.2],
+        [-2.4, -5.8], [-1.8, -5.8], [-1.2, -5.8], [1.2, -5.8], [1.8, -5.8], [2.4, -5.8],
+        [-1.8, 1.3], [1.3, 1.8], [1.8, -1.3], [-1.3, -1.8]
+      ],
+      "clear_cups": [
+        [-5.8, -1.2], [-5.8, -1.8], [-5.8, -2.4], [5.8, -1.2], [5.8, -1.8], [5.8, -2.4]
+      ],
+      "pins": [
+        [[-1.55, 1.1], ["#EC0C3A", "#20B7E8"]],
+        [[1.1, 1.55], ["#EC0C3A", "#20B7E8"]],
+        [[1.55, -1.1], ["#EC0C3A", "#20B7E8"]],
+        [[-1.1, -1.55], ["#EC0C3A", "#20B7E8"]],
+        [[-3.9, 3.9], ["#EC0C3A", "#FFFF00"]],
+        [[3.9, -3.9], ["#20B7E8", "#FFFF00"]],
+        [[3.9, 3.9], ["#FFFF00", "#FFFF00"]],
+        [[-3.9, -3.9], ["#FFFF00", "#FFFF00"]],
+        [[-2.9, 2.5], ["#FFFF00", "#FFFF00"]],
+        [[2.9, -2.5], ["#FFFF00", "#FFFF00"]],
+        [[2.5, 2.9], ["#FFFF00", "#FFFF00"]],
+        [[-2.5, -2.9], ["#FFFF00", "#FFFF00"]]
+      ]
+    }
+  }
+}

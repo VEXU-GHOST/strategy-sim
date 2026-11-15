@@ -1,0 +1,286 @@
+{
+  "version": "vexu_override_strategy_surrogate_v1",
+  "field_size": 12.0,
+  "autonomous_seconds": 30.0,
+  "driver_seconds": 90.0,
+  "endgame_seconds": 10.0,
+  "robot_speed_units_per_second": 4.0,
+  "action_seconds": {
+    "collect": 0.8,
+    "score": 1.0,
+    "set_toggle": 0.7,
+    "go_midfield": 0.5,
+    "wait": 0.75
+  },
+  "score_points": {
+    "alliance_colored_half": 5.0,
+    "yellow_half": 10.0,
+    "midfield_robot": 8.0,
+    "autonomous_bonus": 12.0
+  },
+  "awp": {
+    "scored_halves": 12,
+    "goals_with_two_halves": 4,
+    "required_midfield_robots": 1,
+    "required_no_perimeter_contact": true
+  },
+  "reward": {
+    "score_difference_scale": 0.1,
+    "awp_bonus": 3.0,
+    "terminal_win_bonus": 4.0,
+    "wait_penalty_per_second": 0.02,
+    "duplicate_target_penalty": 0.04
+  },
+  "training": {
+    "gamma_per_second": 0.99,
+    "gae_lambda_per_second": 0.95,
+    "learning_rate": 0.0003,
+    "clip_epsilon": 0.2,
+    "entropy_coef": 0.015,
+    "value_coef": 0.5,
+    "max_grad_norm": 0.5,
+    "rollout_steps": 512,
+    "update_epochs": 4,
+    "minibatch_size": 128,
+    "hidden_size": 192
+  },
+  "initial_robots": {
+    "A0": [
+      0.7,
+      2.0
+    ],
+    "A1": [
+      0.7,
+      10.0
+    ],
+    "B0": [
+      11.3,
+      10.0
+    ],
+    "B1": [
+      11.3,
+      2.0
+    ]
+  },
+  "goals": [
+    {
+      "id": "G0",
+      "position": [
+        2.0,
+        4.0
+      ],
+      "quadrant": 0,
+      "owner": "red",
+      "max_stack_items": 7
+    },
+    {
+      "id": "G1",
+      "position": [
+        3.5,
+        5.0
+      ],
+      "quadrant": 0,
+      "owner": "neutral",
+      "max_stack_items": 7
+    },
+    {
+      "id": "G2",
+      "position": [
+        4.0,
+        9.0
+      ],
+      "quadrant": 1,
+      "owner": "red",
+      "max_stack_items": 7
+    },
+    {
+      "id": "G3",
+      "position": [
+        5.0,
+        8.5
+      ],
+      "quadrant": 1,
+      "owner": "neutral",
+      "max_stack_items": 7
+    },
+    {
+      "id": "G4",
+      "position": [
+        6.0,
+        6.0
+      ],
+      "quadrant": -1,
+      "owner": "neutral",
+      "max_stack_items": 11
+    },
+    {
+      "id": "G5",
+      "position": [
+        10.0,
+        8.0
+      ],
+      "quadrant": 2,
+      "owner": "blue",
+      "max_stack_items": 7
+    },
+    {
+      "id": "G6",
+      "position": [
+        8.5,
+        7.0
+      ],
+      "quadrant": 2,
+      "owner": "neutral",
+      "max_stack_items": 7
+    },
+    {
+      "id": "G7",
+      "position": [
+        8.0,
+        3.0
+      ],
+      "quadrant": 3,
+      "owner": "blue",
+      "max_stack_items": 7
+    },
+    {
+      "id": "G8",
+      "position": [
+        7.0,
+        3.5
+      ],
+      "quadrant": 3,
+      "owner": "neutral",
+      "max_stack_items": 7
+    }
+  ],
+  "toggles": [
+    {
+      "id": "Q0",
+      "position": [
+        0.7,
+        6.0
+      ],
+      "quadrant": 0
+    },
+    {
+      "id": "Q1",
+      "position": [
+        6.0,
+        11.3
+      ],
+      "quadrant": 1
+    },
+    {
+      "id": "Q2",
+      "position": [
+        11.3,
+        6.0
+      ],
+      "quadrant": 2
+    },
+    {
+      "id": "Q3",
+      "position": [
+        6.0,
+        0.7
+      ],
+      "quadrant": 3
+    }
+  ],
+  "sources": [
+    {
+      "id": "S0",
+      "position": [
+        1.2,
+        1.2
+      ],
+      "red_pin": 5,
+      "blue_pin": 1,
+      "yellow_pin": 5,
+      "cup": 5
+    },
+    {
+      "id": "S1",
+      "position": [
+        1.2,
+        10.8
+      ],
+      "red_pin": 5,
+      "blue_pin": 1,
+      "yellow_pin": 5,
+      "cup": 5
+    },
+    {
+      "id": "S2",
+      "position": [
+        5.0,
+        2.5
+      ],
+      "red_pin": 3,
+      "blue_pin": 3,
+      "yellow_pin": 5,
+      "cup": 4
+    },
+    {
+      "id": "S3",
+      "position": [
+        7.0,
+        9.5
+      ],
+      "red_pin": 3,
+      "blue_pin": 3,
+      "yellow_pin": 5,
+      "cup": 4
+    },
+    {
+      "id": "S4",
+      "position": [
+        10.8,
+        1.2
+      ],
+      "red_pin": 1,
+      "blue_pin": 5,
+      "yellow_pin": 5,
+      "cup": 5
+    },
+    {
+      "id": "S5",
+      "position": [
+        10.8,
+        10.8
+      ],
+      "red_pin": 1,
+      "blue_pin": 5,
+      "yellow_pin": 5,
+      "cup": 5
+    }
+  ],
+  "symmetry": {
+    "goals": {
+      "G0": "G5",
+      "G1": "G6",
+      "G2": "G7",
+      "G3": "G8",
+      "G4": "G4",
+      "G5": "G0",
+      "G6": "G1",
+      "G7": "G2",
+      "G8": "G3"
+    },
+    "sources": {
+      "S0": "S5",
+      "S1": "S4",
+      "S2": "S3",
+      "S3": "S2",
+      "S4": "S1",
+      "S5": "S0"
+    },
+    "toggles": {
+      "Q0": "Q2",
+      "Q1": "Q3",
+      "Q2": "Q0",
+      "Q3": "Q1"
+    }
+  }
+}
