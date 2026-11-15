@@ -6,7 +6,7 @@ Independent, runnable Python strategy-simulation + RL pipeline. You **do not** n
 
 > **Integrated:** `run.py` now defaults to `--env field`, which trains on the teammate's
 > `rl_game/env/vex_field_environment` engine through `vex_rl/field_backend.py` and
-> `config_override_field.json`. See **`FIELD_INTEGRATION.md`**. Pass `--env surrogate` for the abstract
+> `config_override_field.json`. Pass `--env surrogate` for the abstract
 > simulator described below.
 
 ## One-minute start (PowerShell / VSCode)
